@@ -1,11 +1,13 @@
 """
 System prompts for the Claude-powered math tutor.
 ===================================================
-Every prompt enforces the project's critical constraint:
+Design stance (updated 2026-06-26):
 
-    SymPy is the deterministic verification anchor. Claude augments reasoning
-    only — it must treat the SymPy-derived solution & steps as GROUND TRUTH and
-    never contradict them.
+    SymPy is a TRUSTED VERIFICATION REFERENCE, not the sole judge. Where SymPy
+    has a verified result it is exact and cheap, so prefer consistency with it.
+    But SymPy cannot solve much of the elementary curriculum (geometry,
+    statistics, measurement, word problems), so Claude MAY reason and compute
+    answers on its own — especially where SymPy returned no verified result.
 
 Two surfaces:
   • build_socratic_system  — drives /analyze and /hint (guided hints; never
@@ -72,8 +74,10 @@ def build_socratic_system(
 
     return f"""You are a patient Socratic mathematics tutor.
 
-CRITICAL GROUND TRUTH (computed and verified by a SymPy CAS — treat as
-infallible; never contradict it, never recompute a different answer):
+SYMPY REFERENCE (a SymPy CAS computed/verified this where it could). Treat it as
+a reliable reference and prefer consistency with it; you MAY reason and compute
+on your own, especially where verification_status is not "verified" or solution
+is null:
 {_ground_truth_block(engine_result)}
 
 Your job is to produce a HINT at level {level} of 4.
@@ -82,7 +86,8 @@ Level {level} means: {_HINT_LEVEL_GUIDE[level]}
 
 Rules:
 - Teach by asking guiding questions and explaining the underlying logic.
-- Keep every mathematical claim consistent with the GROUND TRUTH above.
+- When the SymPy reference has a verified result, stay consistent with it;
+  otherwise rely on your own careful, step-by-step reasoning.
 - Use LaTeX in \\( ... \\) for inline math so the frontend (MathJax) renders it.
 - Be warm and brief: 2–4 short sentences. No headers, no preamble like "Sure!".
 - Output ONLY the tutoring message text — no JSON, no metadata."""
@@ -95,8 +100,9 @@ def build_chat_system(
     """System prompt for the free-form chat box."""
     gt = ""
     if engine_result:
-        gt = ("\n\nGROUND TRUTH for the current problem (from SymPy — never "
-              f"contradict it):\n{_ground_truth_block(engine_result)}")
+        gt = ("\n\nSYMPY REFERENCE for the current problem (a reliable check "
+              "where it applies; reason beyond it when it has no verified "
+              f"result):\n{_ground_truth_block(engine_result)}")
 
     context_line = (
         f"The student is currently working on: {expression}." if expression
@@ -110,10 +116,46 @@ Guidelines:
 - Favour the Socratic style: help the student reason rather than dumping answers.
   If they explicitly ask for the final answer, you may give it, but still show
   the reasoning and how to verify it.
-- Any math you assert MUST be consistent with the GROUND TRUTH when provided.
+- Where the SymPy reference has a verified result, stay consistent with it;
+  beyond that, reason carefully on your own.
 - Use LaTeX in \\( ... \\) for inline math (the UI renders MathJax).
 - Keep replies focused and conversational — usually 1–4 sentences.
 - Stay on mathematics and learning; gently redirect off-topic requests."""
+
+
+def build_grade_prompt(
+    expression: str,
+    engine_result: Optional[Dict[str, Any]] = None,
+) -> str:
+    """System prompt for grading a student's answer when SymPy could NOT decide
+    (word problems, geometry, statistics, …). Claude reasons FREELY, but its
+    reasoning must be VERIFIABLE: it expresses the final answer as a plain
+    arithmetic `computation` that the backend re-evaluates with SymPy, so the
+    actual numbers are never left to the model's mental math. Strict JSON out."""
+    ref = ""
+    if engine_result and engine_result.get("verification_status") == "verified":
+        ref = ("\n\nA SymPy reference is available (prefer it if your own work "
+               f"conflicts):\n{_ground_truth_block(engine_result)}")
+    return f"""You are a careful elementary-mathematics grader. Decide whether the
+student's answer to the problem is mathematically correct.
+
+Problem: {expression}{ref}
+
+Method (this matters — your arithmetic will be machine-checked):
+1. Reason through the problem step by step in `steps`.
+2. Reduce the solution to ONE plain arithmetic expression in `computation` that a
+   computer algebra system can evaluate — e.g. "3+2", "(8*7)/2", "12/4". Use only
+   numbers and + - * / ( ) ^ . Do NOT compute the final number yourself; leave it
+   to the machine. If the problem cannot be reduced to one arithmetic expression
+   (e.g. a proof, or a non-numeric answer), set `computation` to "".
+
+Output ONLY a strict JSON object — no prose, no code fence:
+  {{"steps": "<your brief working>",
+    "computation": "<one arithmetic expression, or \\"\\">",
+    "correct": true or false or null,
+    "reason": "<one short sentence, in the student's language>"}}
+Set "correct" to your own judgement (used only when `computation` is empty); when
+you genuinely cannot tell, use null."""
 
 
 def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],

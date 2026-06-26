@@ -11,16 +11,26 @@
 
 ## 0. 一句话定位
 
-一个**苏格拉底式（引导而非直接给答案）小学数学 AI 辅导系统**：FastAPI 后端用 **SymPy 做确定性
-验证锚点** + **Claude 组织自然语言引导** + **nex-n2-pro 视觉模型做手写 OCR**；纯静态多页前端
-提供白板、聊天、自动出题/考试。**核心铁律：SymPy 是唯一事实来源，AI 永不自行另算答案。**
+一个**苏格拉底式（引导而非直接给答案）小学数学 AI 辅导系统**：FastAPI 后端 + **Claude 组织自然
+语言引导/推理** + **nex-n2-pro 视觉模型做手写 OCR**；纯静态多页前端提供白板、聊天、自动出题/考试。
+
+> **★ 方向调整（2026-06-26）：放弃 SymPy，换为大模型自行运算。** 历史上后端以 SymPy 做确定性
+> 验证锚点；现已定向**彻底废止 SymPy 确定性验证**，求解与判分改由 **Claude 端到端自主完成**，
+> 正确性靠自我迭代/多路共识而非 CAS。下面叙事保留 SymPy 的历史角色（项目是怎么来的），但**接下来
+> 的目标是去符号化**，详见 `docs/DEVELOPMENT_PLAN.md` §4「下一首要目标」。
 
 ---
 
 ## 1. 贯穿全程的设计原则（先理解这些，再读代码）
 
-1. **神经-符号分工**：神经网络（Claude）负责"创造/表达"，符号系统（SymPy）负责"保证正确"。
-   任何数学结论必须经 `NeuroSymbolicEngine` 求解/校验，Claude 只能围绕已验证结果组织语言。
+1. **方向：放弃 SymPy，大模型自行运算（2026-06-26 定向）**。终局——求解与判分由 **Claude 端到端
+   自主完成**，**彻底废止 SymPy 确定性验证**；正确性靠 **Claude 审慎推理 + 自我迭代/多路共识**
+   （多路独立算 → 互检/投票 → 收敛到最简正解），而非 CAS 硬判。
+   - **当前过渡态（迁移起点，非终态）**：代码暂为混合——应用题让 Claude 翻成 `computation`、后端
+     用 SymPy 复核（`judged_by` = `sympy`/`claude+sympy`/`claude`）；门禁已放宽以放行自然语言应用题
+     （只拦符号垃圾+注入）。原"SymPy 唯一事实来源、Claude 永不另算"的绝对约束**已废止**。
+   - **诚实提醒**：LLM 单次算术会出错，故"放弃 SymPy"须与"自我迭代/多路共识"**同时**落地，否则是退步。
+     Socratic 护栏、策略、降级不受影响。落地方案见 `docs/DEVELOPMENT_PLAN.md` §4「下一首要目标」。
 2. **Socratic 约束不可绕过**：默认不直接给最终答案，分 5 级渐进提示（系统提示词强制）。
 3. **优雅降级**：未配置 `.env` 时——提示退回模板引擎、OCR 退回 mock、Claude 不可用返回
    fallback——系统**始终可跑**。
@@ -142,9 +152,11 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 **未完成 / 建议优先级**（详见 `docs/DEVELOPMENT_PLAN.md`，按"价值/风险"排）：
 
 1. **轮换密钥**（唯一带安全后果的待办，坑 #8）。
-2. **Phase 1 深化**：`memory.py` 已落地基础；可加 `skills` 技能固化表 + `GET /memory/{session}`
-   聚合视图。注意 `success_rate` 现恒为 0——`record_interaction` 调用点从不传 `user_solved=true`，
-   若要自适应难度真正爬升，需接一个"学生已解出"信号。
+2. **Phase 1 深化**：`memory.py` 已落地基础。✅ **`success_rate` 恒为 0 的缺陷已修复
+   （2026-06-26）**——`POST /verify` 现接受学生自填 `answer`，并把真实"已解出/未解出"信号写入经验记忆；`record_interaction` 在 `/verify`
+   被以真实 `user_solved` 调用，自适应难度（`success_rate` / `is_advanced`）从此可随历史爬升。
+   运行验证：答对后 `success_rate` 0→0.2、`successful_strategies` 记录 `hints_needed`、跨**新进程**
+   读盘留存。可继续深化：`skills` 技能固化表 + `GET /memory/{session}` 聚合视图。
 3. **让 demo 真正消费选择参数**：`demo_sellection.html` 传了 `?grade=&core=&methods=`，
    但 `demo_standalone.html` 尚未使用。
 4. **Phase 2 起**（DEVELOPMENT_PLAN）：Data Manager 自动架构树 → ALMAS 多智能体编排 →
@@ -153,7 +165,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 **工作方式约定**（沿用，很重要）：
 - 改任何东西后，**跑起来看真实返回**（curl/urllib/headless），不要只跑单测；慢调用给足超时。
-- 保持零额外依赖、密钥只走 `config.py`、SymPy 永远是数学结论的最终裁判。
+- 保持零额外依赖、密钥只走 `config.py`。
 
 ---
 

@@ -149,6 +149,7 @@ class MathRequest(BaseModel):
     action: str = "solve"
     session_id: Optional[str] = None
     model: Optional[str] = None   # Claude model id for the dropdown; None → default
+    answer: Optional[str] = None  # student's own answer, for /verify grading (None → just solve)
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -236,7 +237,8 @@ class PolicyEngine:
             "type": "resource",
         },
         "domain_restriction": {
-            "description": "Only permit mathematical expressions",
+            "description": "Permit math expressions AND natural-language word "
+                           "problems; only block symbol garbage",
             "penalty": 8.0,
             "type": "domain",
         },
@@ -277,11 +279,16 @@ class PolicyEngine:
             )
             penalty += cls.POLICIES["complexity_bound"]["penalty"]
 
-        # Domain: reject clearly non-mathematical input
-        math_chars = set("0123456789xyzabcdefXYZABCDEF+-*/^=()., sincotaglqrtexpdi")
-        non_math_ratio = sum(1 for c in expression if c.lower() not in math_chars) / max(len(expression), 1)
-        if non_math_ratio > 0.5 and len(expression) > 10:
-            violations.append("Input does not appear to be a mathematical expression")
+        # Domain: natural-language word problems are now WELCOME — the model
+        # reasons over them and SymPy verifies the arithmetic. So only block
+        # obvious garbage: input that is mostly non-alphanumeric symbols rather
+        # than real words/numbers. CJK and Latin letters and digits all count as
+        # alphanumeric via str.isalnum(), so word problems sail through.
+        ok_punct = set(" \t\n\r+-*/^=()[]{}.,，。：:；;？?！!%、…\"'“”‘’`_<>|°")
+        weird = sum(1 for c in expression if not (c.isalnum() or c in ok_punct))
+        weird_ratio = weird / max(len(expression), 1)
+        if weird_ratio > 0.4 and len(expression) > 10:
+            violations.append("Input does not look like a math problem or question")
             penalty += cls.POLICIES["domain_restriction"]["penalty"]
 
         return PolicyCheckResult(
@@ -311,6 +318,32 @@ def safe_parse(expr_str: str):
     """Parse an expression string into a SymPy object with safety transforms."""
     cleaned = expr_str.replace("^", "**").strip()
     return parse_expr(cleaned, transformations=TRANSFORMATIONS)
+
+
+def _looks_like_natural_language(expr_str: str) -> bool:
+    """True when the input is prose / a word problem rather than a bare formal
+    expression. SymPy's parser will happily turn "小明有3个苹果" (or "John has 3
+    apples") into a product of junk symbols and report it "solved", so we detect
+    such input up front and let SymPy decline it (callers then defer to Claude).
+
+    Triggers on: a question mark; any non-ASCII letter (e.g. CJK); or — after a
+    trial parse — any multi-character alphabetic free symbol, which only arises
+    from prose (genuine elementary variables are single letters; sin/cos/pi are
+    functions/constants, not free symbols)."""
+    if "?" in expr_str or "？" in expr_str:
+        return True
+    if any(c.isalpha() and ord(c) > 127 for c in expr_str):
+        return True
+    # The parser splits identifiers into single-char symbols, so prose explodes
+    # into many free symbols while an elementary formula has at most a couple of
+    # variables. >3 distinct free symbols ⇒ almost certainly a word problem.
+    try:
+        expr = safe_parse(expr_str.split("=")[0])
+        if len(expr.free_symbols) > 3:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 class NeuroSymbolicEngine:
@@ -417,6 +450,13 @@ class NeuroSymbolicEngine:
             "verified_steps": [],
             "verification_status": "pending",
         }
+
+        # Natural-language word problems parse into junk symbols; don't pretend to
+        # solve them. Mark unparseable (solution stays None) so the grader defers
+        # to Claude and prompts know SymPy has no verified result here.
+        if _looks_like_natural_language(expr_str):
+            result["verification_status"] = "unparseable"
+            return result
 
         try:
             if "=" in expr_str:
@@ -1346,9 +1386,10 @@ def generate_socratic(engine_result, hint_level, adaptive, model, session_id):
     """Produce a Socratic response, preferring Claude and falling back to the
     deterministic template engine.
 
-    SymPy's `engine_result` is the ground truth in BOTH paths — Claude is only
-    allowed to phrase guidance around it (see prompts.build_socratic_system),
-    never to recompute the answer. Returns the SocraticEngine response shape
+    SymPy's `engine_result` is a trusted REFERENCE in both paths: where it has a
+    verified result Claude is asked to stay consistent with it, but Claude may
+    reason and compute on its own where SymPy is silent (see
+    prompts.build_socratic_system). Returns the SocraticEngine response shape
     plus an `ai_provider` field so the UI can show who answered.
     """
     base = SocraticEngine.generate_socratic_response(
@@ -1779,24 +1820,225 @@ def get_policies():
     }
 
 
+def _parse_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Pull a single JSON object out of a model response (tolerate fences/prose)."""
+    if not text:
+        return None
+    t = text.strip()
+    t = _re.sub(r"^```(?:json)?", "", t).strip()
+    t = _re.sub(r"```$", "", t).strip()
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end > start:
+        t = t[start:end + 1]
+    try:
+        obj = _json.loads(t)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _compare_answer(correct: List[str], answer: str) -> Optional[bool]:
+    """Compare a student `answer` against known-correct value(s) (each a string).
+    Handles boolean identities and numeric/symbolic sets. None = undetermined.
+    Shared by the SymPy-solve path and the Claude→SymPy computation path."""
+    if not correct:
+        return None
+
+    # Identity problems whose solution is a boolean ("True"/"False").
+    if len(correct) == 1 and correct[0] in ("True", "False"):
+        got = answer.strip().lower().rstrip(".!。")
+        truthy = {"true", "yes", "correct", "成立", "对", "正确"}
+        falsy = {"false", "no", "incorrect", "不成立", "错", "错误"}
+        if got in truthy:
+            return correct[0] == "True"
+        if got in falsy:
+            return correct[0] == "False"
+        return None  # can't tell what the student meant → undetermined
+
+    # Numeric / symbolic answers: compare the SET of values the student gave
+    # against the SET of correct values. Tolerate "x = 2", "2", "2, -3" forms.
+    try:
+        correct_vals = [safe_parse(c) for c in correct]
+    except Exception:
+        return None
+
+    raw = answer.strip()
+    if "=" in raw:                       # student wrote "x = 2" → keep the value
+        raw = raw.split("=")[-1].strip()
+    candidates = [p.strip() for p in raw.split(",") if p.strip()]
+    if not candidates:
+        return None
+    try:
+        student_vals = [safe_parse(c) for c in candidates]
+    except Exception:
+        return False                     # unparseable answer → simply wrong
+
+    def _eq(a, b) -> bool:
+        try:
+            return simplify(a - b) == 0
+        except Exception:
+            return False
+
+    # Correct iff every expected value is matched AND the student added no extras.
+    all_covered = all(any(_eq(cv, sv) for sv in student_vals) for cv in correct_vals)
+    no_extras = all(any(_eq(sv, cv) for cv in correct_vals) for sv in student_vals)
+    return all_covered and no_extras
+
+
+def _sympy_grade(expression: str, answer: str) -> Optional[bool]:
+    """SymPy-only verdict: True/False where SymPy can solve & compare, else None.
+    Exact and instant — this stays the PREFERRED judge wherever it's confident."""
+    engine = NeuroSymbolicEngine.solve_with_steps(expression)
+    if engine.get("verification_status") == "error":
+        return None
+    return _compare_answer(engine.get("solution") or [], answer)
+
+
+def _eval_closed_form(expr_str: str) -> Optional[str]:
+    """Deterministically evaluate an arithmetic expression to an exact value
+    string, or None if it has free symbols / won't parse. This is the bridge
+    that lets SymPy VERIFY a Claude-proposed computation: the LLM translates a
+    word problem into arithmetic, the CAS does the actual numbers — so the final
+    answer is never left to the model's mental math."""
+    if not expr_str or not expr_str.strip():
+        return None
+    try:
+        val = simplify(safe_parse(expr_str))
+    except Exception:
+        return None
+    if getattr(val, "free_symbols", set()):
+        return None  # not a closed number → can't verify symbolically
+    return str(val)
+
+
+def _claude_grade(expression: str, answer: str, session_id: Optional[str],
+                  model: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Judge an answer SymPy couldn't reach on its own (word problems, geometry,
+    statistics, …). Claude is asked to (a) reason step by step and (b) express
+    the answer as a SymPy-evaluable `computation`. When that computation reduces
+    to a closed number, SYMPY recomputes it and grades the student against THAT
+    (verifiable, mistake-proof arithmetic) → judged_by "claude+sympy". Only if no
+    machine-checkable computation is available do we fall back to Claude's own
+    boolean verdict → judged_by "claude". Returns None when Claude is unavailable
+    or unparseable, so the caller degrades to "undetermined"."""
+    if not claude_service.available():
+        return None
+    engine = NeuroSymbolicEngine.solve_with_steps(expression)
+    system = prompts.build_grade_prompt(expression, engine)
+    user = f'Student answer: "{answer}". Grade it now and return only the JSON.'
+    try:
+        text = claude_service.complete(
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            model=model,
+            session_id=session_id or "grade",
+            max_tokens=400,
+            temperature=0,
+        )
+    except ClaudeError:
+        return None
+    obj = _parse_json_object(text)
+    if not obj:
+        return None
+    reason = str(obj.get("reason", ""))[:200]
+
+    # Preferred: SymPy verifies the model's proposed computation, then grades.
+    ground_truth = _eval_closed_form(str(obj.get("computation") or ""))
+    if ground_truth is not None:
+        verdict = _compare_answer([ground_truth], answer)
+        if verdict is not None:
+            return {"correct": verdict, "judged_by": "claude+sympy",
+                    "reason": reason, "computation": str(obj["computation"]),
+                    "ground_truth": ground_truth}
+
+    # Fallback: trust Claude's own boolean judgement (no machine check possible).
+    if "correct" not in obj:
+        return None
+    val = obj["correct"]
+    correct = bool(val) if isinstance(val, bool) else None  # JSON null → None
+    return {"correct": correct, "judged_by": "claude", "reason": reason}
+
+
+def _check_student_answer(expression: str, answer: str, session_id: Optional[str] = None,
+                          model: Optional[str] = None) -> Dict[str, Any]:
+    """Grade a student's answer under the HYBRID stance: SymPy decides where it
+    can (exact, instant, preferred); otherwise Claude reasons freely but its
+    arithmetic is verified by SymPy where possible. SymPy is no longer the SOLE
+    arbiter, so word problems / geometry / statistics are now gradable too.
+    Returns {"correct": Optional[bool], "judged_by": str|None, "reason": str|None}
+    plus optional "computation"/"ground_truth"; correct=None = undetermined.
+    """
+    if not answer or not answer.strip():
+        return {"correct": None, "judged_by": None, "reason": None}
+
+    sv = _sympy_grade(expression, answer)
+    if sv is not None:
+        return {"correct": sv, "judged_by": "sympy", "reason": None}
+
+    cg = _claude_grade(expression, answer, session_id, model)
+    if cg is not None and cg["correct"] is not None:
+        out = {"correct": cg["correct"], "judged_by": cg["judged_by"],
+               "reason": cg.get("reason")}
+        if cg.get("computation"):
+            out["computation"] = cg["computation"]
+        if cg.get("ground_truth") is not None:
+            out["ground_truth"] = cg["ground_truth"]
+        return out
+
+    return {"correct": None, "judged_by": None, "reason": (cg or {}).get("reason")}
+
+
 @app.post("/verify")
 def verify_expression(request: MathRequest):
     """
-    Standalone neuro-symbolic verification endpoint.
-    Useful for checking student work.
+    Standalone verification endpoint — useful for checking student work.
+
+    If the student supplies their own `answer` (plus a `session_id`), the answer
+    is graded under the hybrid stance: SymPy decides where it can, else Claude
+    judges (see `_check_student_answer`). The verdict is recorded in experience
+    memory as a genuine "solved / not solved" signal, which is what lets
+    `success_rate` and adaptive difficulty actually move over time. The response
+    carries `judged_by` so the UI/caller knows who graded it.
     """
     policy_result = PolicyEngine.evaluate(request.expression)
     if not policy_result.allowed:
         raise HTTPException(status_code=400, detail="Policy violation")
 
     result = NeuroSymbolicEngine.solve_with_steps(request.expression)
-    return {
+    response: Dict[str, Any] = {
         "original": request.expression,
         "classification": result["classification"],
         "verified_steps": result["verified_steps"],
         "verification_status": result["verification_status"],
         "latex": result["latex"],
     }
+
+    # ── Grade the student's own answer + emit the experience-memory signal ──
+    if request.answer is not None and request.answer.strip():
+        verdict = _check_student_answer(
+            request.expression, request.answer, request.session_id, request.model
+        )
+        is_correct = verdict["correct"]
+        response["answer_checked"] = is_correct is not None
+        response["answer_correct"] = is_correct
+        response["judged_by"] = verdict["judged_by"]
+        if verdict.get("reason"):
+            response["judge_reason"] = verdict["reason"]
+        # Expose the verifiable reasoning trace when SymPy checked Claude's math.
+        if verdict.get("computation"):
+            response["computation"] = verdict["computation"]
+        if verdict.get("ground_truth") is not None:
+            response["ground_truth"] = verdict["ground_truth"]
+        if request.session_id and is_correct is not None:
+            session = memory.get_or_create_session(request.session_id)
+            # Record success at however many hints the student had reached.
+            hint_level = session["hint_levels_used"].get(request.expression, 0)
+            memory.record_interaction(
+                request.session_id, request.expression, hint_level, bool(is_correct),
+            )
+            response["adaptive_context"] = memory.get_adaptive_context(request.session_id)
+
+    return response
 
 
 # ═══════════════════════════════════════════════════════════════════════

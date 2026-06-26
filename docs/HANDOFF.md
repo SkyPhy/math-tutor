@@ -3,8 +3,13 @@
 > 面向接手的 AI 开发者（Codex 等）。本文件描述**当前真实状态**，是事实快照；
 > 路线图见 [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)。
 > 一句话：这是一个 **Socratic（苏格拉底式）AI 数学辅导系统**——FastAPI 后端
-> （SymPy 确定性验证 + Claude 提示）+ 纯静态多页前端 + 手写 OCR + 账户/考试 SQLite 存储。
-> 最后更新：2026-06-24。
+> （Claude 自主推理；SymPy 确定性验证为**过渡，方向上待废止**）+ 纯静态多页前端 + 手写 OCR +
+> 账户/考试 SQLite 存储。
+> 最后更新：2026-06-26。
+>
+> **★ 方向（2026-06-26）：放弃 SymPy，换为大模型自行运算。** 求解与判分将由 Claude 端到端自主
+> 完成，SymPy 确定性验证从主链路彻底移除（正确性改靠自我迭代/多路共识）。本文描述的仍是**当前
+> 过渡态**（混合）；下一首要目标见 [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) §4。
 
 ---
 
@@ -30,7 +35,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 一个小学数学（义务教育课标）AI 辅导 + 出题 + 考试系统，核心原则：
 
-1. **SymPy 是确定性验证锚点**：所有数学结论由 SymPy 求解/校验，Claude 只负责"用语言组织"，不得自行另算答案。
+1.（待彻底废止，全程 Claude 自行推理方才为正解） **SymPy 是可信验证参考（混合裁判，2026-06-26）**：SymPy 在能解的范围内精确、廉价，**优先**采信；它覆盖不了的几何/统计/量与计量/应用题，允许 **Claude 自行推理**——但 **Claude 的算术由 SymPy 复核**：判分时 Claude 把应用题翻成一个可计算的算式 `computation`，后端用 SymPy 求值得到 ground truth 再判学生答案（`judged_by="claude+sympy"`；无可验证算式时才退回 Claude 自判 `judged_by="claude"`）。`/verify` 返回 `judged_by`/`computation`/`ground_truth`。原"SymPy 唯一事实来源、不得另算"的绝对约束已废止。
+   - **门禁已放宽**：`PolicyEngine.domain_restriction` 现接受自然语言应用题（CJK/字母/数字均算"内容"，只拦符号垃圾）；注入 token 与长度仍是硬拦截，安全不变。
+   - **自然语言识别**：`NeuroSymbolicEngine.solve_with_steps` 现会识别应用题（含 CJK/`?`/解析出>3 个自由符号即判为 prose），标 `verification_status="unparseable"`、`solution=None`，避免 SymPy 把"小明有3个苹果"硬解成垃圾符号还自称 verified。
 2. **Socratic 约束不可绕过**：默认不直接给最终答案，分 5 级渐进提示。
 3. **AI 不可用时优雅降级**：未配置 `.env` 时，提示退回模板引擎，OCR 退回 mock，系统始终可跑。
 
@@ -107,7 +114,7 @@ math/
 | GET | `/exam/by-tag?tag=&dimension=` | 按标签即时检索题目（SQL 索引） | 否 |
 | POST | `/auth/signup`,`/signin`,`/signout` · GET `/auth/me` | 账户/会话 | Bearer（me/signout） |
 | GET | `/session/{id}`, `/architecture`, `/policies` | 会话/架构元数据/策略 | 否 |
-| POST | `/verify`, `/plot`, `/animate` | SymPy 验证 / 绘图数据 / 模板动画 | 否 |
+| POST | `/verify`, `/plot`, `/animate` | SymPy 验证 / 绘图数据 / 模板动画；`/verify` 可传 `answer`+`session_id`，混合判分（SymPy 优先，应用题走 Claude 翻算式→SymPy 复核），返回 `judged_by`/`computation`/`ground_truth`，并把"已解出"信号写入经验记忆 | 否 |
 
 > **重要**：曾短暂用 `require_user` 给 `/analyze /hint /recognize /claude/chat` 加鉴权，
 > 后**按用户要求移除**（demo 不需登录即可用）。`require_user` / `optional_user` 依赖仍在
@@ -192,6 +199,12 @@ math/
 - [x] **`ExperienceMemory` 持久化**到 SQLite（DEVELOPMENT_PLAN 阶段 1，2026-06-26 完成）——
       `backend/app/memory.py`（`data/memory.db`，gitignore）。已验证：提示分级 [1,2,3] 递增，
       重启后会话历史与提示等级留存、续接到 4；接口面与原进程内版本一致。
+- [x] **修复 `success_rate` 恒为 0**（Phase 1 收尾，2026-06-26）——`POST /verify` 接受学生
+      `answer`，判对错后写入真实 `user_solved` 信号；自适应难度可随历史爬升。已运行验证：答对后
+      `success_rate` 0→0.2，跨新进程读盘留存。（判分当前为混合；按新方向将改为 Claude 自主判分，
+      见 §1 方向说明。"AI 不判数学对错"的旧铁律**已废止**。）
+- [ ] **★ 下一首要目标：放弃 SymPy，大模型自行运算**——求解/判分改 Claude 端到端自主，SymPy 退役，
+      正确性靠自我迭代/多路共识。落地方案见 `DEVELOPMENT_PLAN.md` §4「下一首要目标」。
 - [ ] **轮换密钥**：`.env` 含真实 key（坑 #9），交接后请轮换 `NEX_OCR_API_KEY` 与 `CLAUDE_API_KEY`。
 - [ ] 安全：`/exam/*`、`/analyze` 等均无鉴权（按设计）；如需多用户隔离再用 `require_user`。
 

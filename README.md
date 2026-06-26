@@ -1,17 +1,25 @@
 # AI Math Tutor
 
 A Socratic (guided, never answer-dumping) AI math tutoring system for primary-school
-mathematics. A **FastAPI** backend pairs **SymPy** (deterministic verification) with
-**Claude** (natural-language tutoring) and a **vision OCR** model for handwriting; a
-**static multi-page frontend** provides the whiteboard, chat, and auto-generated exams.
+mathematics. A **FastAPI** backend pairs **Claude** (natural-language reasoning & tutoring)
+with a **vision OCR** model for handwriting; a **static multi-page frontend** provides the
+whiteboard, chat, and auto-generated exams.
+
+> **★ Direction (2026-06-26): drop SymPy, let the LLM do the computation itself.** The
+> deterministic SymPy verifier is being retired from the main path; solving and grading move
+> to Claude end-to-end, with correctness coming from self-iteration / multi-path consensus
+> rather than a CAS. The code today is still the **transitional hybrid**; see
+> [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §4 "下一首要目标".
 
 > **New here / taking over the project?** Start with [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md)
 > (how the project was built, step by step), then [`docs/HANDOFF.md`](docs/HANDOFF.md) for the
 > full factual snapshot, and [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) for the roadmap.
 
 ## Core principles
-- **SymPy is the verification anchor** — every math result is solved/checked by SymPy;
-  Claude only phrases the guidance, it never computes the answer itself.
+- **(Direction) Drop SymPy → the LLM computes** — historically SymPy was the verification
+  anchor (it solved/checked every result). The project is now moving to Claude reasoning
+  end-to-end, with SymPy retired; correctness rests on self-iteration / multi-path consensus.
+  The current code is a transitional hybrid (SymPy still double-checks where it can).
 - **Socratic constraint** — the tutor gives graduated hints (5 levels), never the final
   answer up front.
 - **Graceful degradation** — with no API keys configured, the tutor falls back to a
@@ -84,9 +92,10 @@ frontend; it calls the backend at `http://localhost:8000`).
 ## Features
 - **Whiteboard** — draw on the native canvas or Excalidraw (switchable), with fullscreen.
 - **Handwriting OCR** — submit the board; `nex-n2-pro` transcribes it to an expression.
-- **SymPy analysis** — deterministic solving, simplification, classification, step generation.
+- **Math analysis** — solving, simplification, classification, step generation (currently
+  SymPy; being moved to Claude self-reasoning per the direction above).
 - **Socratic hints** — 5 graduated levels, AI-generated (Claude) with template fallback.
-- **AI chat** — discuss a problem with a selectable Claude model, grounded in the SymPy result.
+- **AI chat** — discuss a problem with a selectable Claude model.
 - **Auto exam** — generates a question for every knowledge point (two-dimension taxonomy
   from [`lesson/README.md`](lesson/README.md)), stored in SQLite and tag-indexed; tags are
   hidden behind a per-question button.
