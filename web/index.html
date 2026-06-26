@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Math Tutor — Socratic learning powered by symbolic reasoning</title>
+    <meta name="description"
+        content="An AI math tutor that guides instead of giving answers: Socratic hints, deterministic SymPy verification, handwriting recognition, and a Claude-powered chat.">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --accent-blue: #38bdf8;
+            --accent-purple: #818cf8;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f1f5f9;
+            --text-dim: #94a3b8;
+        }
+
+        * { box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-main);
+            margin: 0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Ambient gradient blobs in the background */
+        .bg-orbs {
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            overflow: hidden;
+            background: radial-gradient(circle at top left, #1e293b, var(--bg-deep));
+        }
+        .bg-orbs span {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(90px);
+            opacity: 0.35;
+            animation: float 14s ease-in-out infinite;
+        }
+        .bg-orbs span:nth-child(1) {
+            width: 480px; height: 480px; top: -120px; left: -80px;
+            background: #2563eb;
+        }
+        .bg-orbs span:nth-child(2) {
+            width: 420px; height: 420px; bottom: -140px; right: -60px;
+            background: #7c3aed; animation-delay: -5s;
+        }
+        .bg-orbs span:nth-child(3) {
+            width: 320px; height: 320px; top: 40%; left: 55%;
+            background: #0ea5e9; opacity: 0.2; animation-delay: -9s;
+        }
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(30px, -40px) scale(1.08); }
+        }
+
+        /* ── Top nav ── */
+        nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 26px 24px;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 600;
+            font-size: 1.15rem;
+        }
+        .brand .logo {
+            width: 38px; height: 38px;
+            display: grid; place-items: center;
+            border-radius: 11px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            font-size: 1.2rem;
+        }
+        .nav-links { display: flex; gap: 26px; align-items: center; }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.15s;
+        }
+        .nav-links a:hover { color: var(--text-main); }
+        .nav-cta {
+            padding: 9px 18px;
+            border-radius: 10px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-main) !important;
+        }
+        .nav-cta:hover { border-color: var(--accent-blue); }
+
+        .auth-nav { display: flex; align-items: center; gap: 16px; }
+        .auth-nav .who { color: var(--text-main); font-size: 0.95rem; }
+        .auth-nav .who b { font-weight: 600; }
+        .auth-nav .link-btn {
+            background: none; border: none; color: var(--text-dim); font-family: inherit;
+            font-size: 0.95rem; cursor: pointer; padding: 0; transition: color 0.15s;
+        }
+        .auth-nav .link-btn:hover { color: var(--text-main); }
+
+        /* ── Hero ── */
+        header.hero {
+            max-width: 880px;
+            margin: 0 auto;
+            padding: 70px 24px 40px;
+            text-align: center;
+        }
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 16px;
+            border-radius: 999px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            margin-bottom: 28px;
+        }
+        .eyebrow .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 10px #34d399;
+        }
+        h1 {
+            font-weight: 700;
+            font-size: clamp(2.4rem, 6vw, 4rem);
+            line-height: 1.08;
+            margin: 0 0 22px;
+            letter-spacing: -0.02em;
+        }
+        h1 .grad {
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .lede {
+            font-weight: 300;
+            font-size: clamp(1.05rem, 2.4vw, 1.3rem);
+            color: var(--text-dim);
+            max-width: 640px;
+            margin: 0 auto 38px;
+            line-height: 1.6;
+        }
+        .cta-row {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px 30px;
+            border-radius: 14px;
+            font-family: inherit;
+            font-size: 1.05rem;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: #0b1020;
+            font-weight: 600;
+            box-shadow: 0 10px 30px rgba(56, 189, 248, 0.25);
+        }
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 16px 40px rgba(129, 140, 248, 0.4);
+        }
+        .btn-ghost {
+            background: var(--glass-bg);
+            border-color: var(--glass-border);
+            color: var(--text-main);
+        }
+        .btn-ghost:hover { border-color: var(--accent-blue); transform: translateY(-3px); }
+
+        .hero-note {
+            margin-top: 22px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+        .hero-note code {
+            background: rgba(255,255,255,0.08);
+            padding: 2px 7px;
+            border-radius: 6px;
+            font-size: 0.82rem;
+        }
+
+        /* ── Sections ── */
+        section { max-width: 1100px; margin: 0 auto; padding: 50px 24px; }
+        .section-title {
+            text-align: center;
+            font-size: 1.9rem;
+            font-weight: 600;
+            margin: 0 0 10px;
+        }
+        .section-sub {
+            text-align: center;
+            color: var(--text-dim);
+            font-weight: 300;
+            margin: 0 auto 44px;
+            max-width: 560px;
+        }
+
+        /* Feature cards */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 22px;
+        }
+        .card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 28px;
+            transition: transform 0.2s, border-color 0.2s, background 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(56, 189, 248, 0.4);
+            background: rgba(255, 255, 255, 0.07);
+        }
+        .card .icon {
+            width: 50px; height: 50px;
+            display: grid; place-items: center;
+            border-radius: 14px;
+            font-size: 1.5rem;
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            margin-bottom: 18px;
+        }
+        .card h3 { margin: 0 0 10px; font-size: 1.2rem; font-weight: 600; }
+        .card p { margin: 0; color: var(--text-dim); font-weight: 300; line-height: 1.6; font-size: 0.96rem; }
+
+        /* How it works steps */
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 22px;
+            counter-reset: step;
+        }
+        .step {
+            position: relative;
+            padding: 26px 24px 24px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 18px;
+        }
+        .step::before {
+            counter-increment: step;
+            content: counter(step);
+            display: grid; place-items: center;
+            width: 36px; height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: #0b1020;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+        .step h4 { margin: 0 0 8px; font-size: 1.05rem; font-weight: 600; }
+        .step p { margin: 0; color: var(--text-dim); font-weight: 300; font-size: 0.92rem; line-height: 1.55; }
+
+        /* Tech pills */
+        .pills { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+        .pill {
+            padding: 9px 18px;
+            border-radius: 999px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        /* Big closing CTA */
+        .cta-band {
+            max-width: 1100px;
+            margin: 30px auto 0;
+            padding: 56px 24px;
+            text-align: center;
+            background: linear-gradient(135deg, rgba(56,189,248,0.12), rgba(129,140,248,0.12));
+            border: 1px solid var(--glass-border);
+            border-radius: 28px;
+        }
+        .cta-band h2 { font-size: 2rem; margin: 0 0 14px; font-weight: 600; }
+        .cta-band p { color: var(--text-dim); font-weight: 300; margin: 0 0 30px; }
+
+        footer {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            padding: 50px 24px 40px;
+            font-weight: 300;
+        }
+        footer a { color: var(--accent-blue); text-decoration: none; }
+
+        /* Reveal on scroll */
+        .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; }
+        .reveal.show { opacity: 1; transform: none; }
+
+        @media (max-width: 640px) {
+            .nav-links a:not(.nav-cta) { display: none; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-orbs"><span></span><span></span><span></span></div>
+
+    <nav>
+        <div class="brand">
+            <span class="logo">∑</span>
+            <span>AI Math Tutor</span>
+        </div>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#how">How it works</a>
+            <a href="#stack">Stack</a>
+            <span id="authNav" class="auth-nav"></span>
+            <a class="nav-cta" href="demo_sellection.html">Open Demo</a>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <span class="eyebrow"><span class="dot"></span> Live interactive prototype</span>
+        <h1>Learn math by <span class="grad">being guided</span>,<br>not given the answer.</h1>
+        <p class="lede">
+            A Socratic AI tutor that hands you the next step — never the solution.
+            Every hint is checked by a symbolic math engine, so the guidance is
+            always correct. Write on the board, ask questions, and reason your way through.
+        </p>
+        <div class="cta-row">
+            <a class="btn btn-primary" href="demo_sellection.html">🚀 Launch the Demo</a>
+            <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+        <p class="hero-note">
+            Tip: start the backend first &mdash; <code>uvicorn main:app --port 8000</code> in
+            <code>math-tutor-demo/backend</code>.
+        </p>
+    </header>
+
+    <section id="features">
+        <h2 class="section-title">What's inside</h2>
+        <p class="section-sub">A full neuro-symbolic tutoring loop — pedagogy you can trust, because the math is verified.</p>
+        <div class="grid">
+            <div class="card reveal">
+                <div class="icon">🧠</div>
+                <h3>Socratic hints</h3>
+                <p>Five escalating levels of guidance — from "what kind of problem is this?" to a fully worked walkthrough — that never reveal the final answer too early.</p>
+            </div>
+            <div class="card reveal">
+                <div class="icon">✅</div>
+                <h3>SymPy verification</h3>
+                <p>A symbolic computer-algebra engine solves and checks every step deterministically. The AI guides; SymPy is the source of truth.</p>
+            </div>
+            <div class="card reveal">
+                <div class="icon">✍️</div>
+                <h3>Handwriting recognition</h3>
+                <p>Write a problem on the whiteboard and submit — a vision model transcribes your handwriting into an expression the tutor can work with.</p>
+            </div>
+            <div class="card reveal">
+                <div class="icon">💬</div>
+                <h3>Claude-powered chat</h3>
+                <p>Discuss any problem in natural language with a Claude model of your choice. Grounded in the verified solution, so it stays accurate.</p>
+            </div>
+            <div class="card reveal">
+                <div class="icon">🎨</div>
+                <h3>Flexible whiteboard</h3>
+                <p>Draw on the built-in canvas or switch to the Excalidraw engine — and expand either to fullscreen for more room to think.</p>
+            </div>
+            <div class="card reveal">
+                <div class="icon">📈</div>
+                <h3>Animated solutions</h3>
+                <p>See the math come alive: SymPy-powered plots and step animations turn an abstract equation into something you can watch unfold.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="how">
+        <h2 class="section-title">How it works</h2>
+        <p class="section-sub">From a scribble on the board to a verified, guided solution.</p>
+        <div class="steps">
+            <div class="step reveal">
+                <h4>Write it down</h4>
+                <p>Sketch your equation on the whiteboard, or just type it in.</p>
+            </div>
+            <div class="step reveal">
+                <h4>Recognise &amp; parse</h4>
+                <p>Handwriting is transcribed and the expression is classified.</p>
+            </div>
+            <div class="step reveal">
+                <h4>Verify with SymPy</h4>
+                <p>The engine solves it exactly and produces checked steps.</p>
+            </div>
+            <div class="step reveal">
+                <h4>Guide, don't tell</h4>
+                <p>The tutor turns those steps into Socratic hints and a chat you can question.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="stack">
+        <h2 class="section-title">Under the hood</h2>
+        <p class="section-sub">A standalone frontend talking to a FastAPI backend — no build step required.</p>
+        <div class="pills">
+            <span class="pill">FastAPI</span>
+            <span class="pill">SymPy CAS</span>
+            <span class="pill">Claude (Opus / Sonnet)</span>
+            <span class="pill">Vision OCR</span>
+            <span class="pill">MathJax</span>
+            <span class="pill">Excalidraw</span>
+            <span class="pill">HTML5 Canvas</span>
+            <span class="pill">Policy &amp; Experience Memory</span>
+        </div>
+    </section>
+
+    <div class="cta-band reveal">
+        <h2>Ready to try it?</h2>
+        <p>Open the interactive demo and work through a problem the Socratic way.</p>
+        <a class="btn btn-primary" href="demo_sellection.html">🚀 Launch the Demo</a>
+    </div>
+
+    <footer>
+        Built on a neuro-symbolic blueprint · SymPy is the verification anchor, AI augments the reasoning.<br>
+        Need setup help? See <a href="../README.md">README.md</a>.
+    </footer>
+
+    <script>
+        // ── Auth nav state ────────────────────────────────────────────────
+        const API = 'http://localhost:8000';
+
+        function renderAuthNav() {
+            const el = document.getElementById('authNav');
+            const token = localStorage.getItem('mt_token');
+            const user = localStorage.getItem('mt_user');
+            if (token && user) {
+                el.innerHTML =
+                    `<span class="who">Hi, <b></b></span>` +
+                    `<button class="link-btn" id="signOutBtn">Sign out</button>`;
+                el.querySelector('.who b').textContent = user;   // safe text insert
+                document.getElementById('signOutBtn').onclick = signOut;
+            } else {
+                el.innerHTML =
+                    `<a href="signin.html">Sign in</a>` +
+                    `<a href="signup.html">Sign up</a>`;
+            }
+        }
+
+        async function signOut() {
+            const token = localStorage.getItem('mt_token');
+            try {
+                await fetch(API + '/auth/signout', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+            } catch (e) { /* offline is fine — we still clear locally */ }
+            localStorage.removeItem('mt_token');
+            localStorage.removeItem('mt_user');
+            renderAuthNav();
+        }
+
+        // If we have a token, confirm it's still valid (and refresh username).
+        async function validateSession() {
+            const token = localStorage.getItem('mt_token');
+            if (!token) return;
+            try {
+                const resp = await fetch(API + '/auth/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    localStorage.setItem('mt_user', data.user.username);
+                } else if (resp.status === 401) {
+                    // Stale/expired token — clear it.
+                    localStorage.removeItem('mt_token');
+                    localStorage.removeItem('mt_user');
+                }
+            } catch (e) { /* backend down — keep optimistic local state */ }
+            renderAuthNav();
+        }
+
+        renderAuthNav();
+        validateSession();
+
+        // Reveal cards/steps as they scroll into view.
+        const io = new IntersectionObserver((entries) => {
+            entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('show'); io.unobserve(e.target); } });
+        }, { threshold: 0.15 });
+        document.querySelectorAll('.reveal').forEach((el, i) => {
+            el.style.transitionDelay = (i % 6 * 0.06) + 's';
+            io.observe(el);
+        });
+    </script>
+</body>
+
+</html>

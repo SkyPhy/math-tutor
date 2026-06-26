@@ -1,0 +1,199 @@
+# 项目交接文档 / Project Handoff
+
+> 面向接手的 AI 开发者（Codex 等）。本文件描述**当前真实状态**，是事实快照；
+> 路线图见 [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)。
+> 一句话：这是一个 **Socratic（苏格拉底式）AI 数学辅导系统**——FastAPI 后端
+> （SymPy 确定性验证 + Claude 提示）+ 纯静态多页前端 + 手写 OCR + 账户/考试 SQLite 存储。
+> 最后更新：2026-06-24。
+
+---
+
+## 0. TL;DR — 30 秒上手
+
+```bash
+# 后端（必须在 backend 目录内运行，否则 uvicorn 找不到 main）
+cd math-tutor-demo/backend
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+# 前端：直接用浏览器打开（静态文件，无需构建）
+#   web/index.html   ← 入口
+```
+
+- **Python**：3.14（系统已装；依赖见 `requirements.txt`，纯标准库 + fastapi/uvicorn/sympy/pillow/python-multipart）。
+- **密钥**：`math-tutor-demo/backend/.env`（**已 gitignore**，当前含真实 key——交接时注意脱敏/轮换）。
+- **数据**：`math-tutor-demo/backend/data/{users.db, exams.db}`（SQLite，已 gitignore）。
+- **外部服务**：一个 **new-api 网关** `https://www.computinger.com`，同时提供 Claude（Anthropic 兼容）和 `nex-n2-pro`（OpenAI 兼容视觉 OCR）。**该网关延迟高且抖动大**（见 §6 坑）。
+- **当前后端进程**：**未运行**（需手动启动）。
+
+---
+
+## 1. 这是什么 / 产品形态
+
+一个小学数学（义务教育课标）AI 辅导 + 出题 + 考试系统，核心原则：
+
+1. **SymPy 是确定性验证锚点**：所有数学结论由 SymPy 求解/校验，Claude 只负责"用语言组织"，不得自行另算答案。
+2. **Socratic 约束不可绕过**：默认不直接给最终答案，分 5 级渐进提示。
+3. **AI 不可用时优雅降级**：未配置 `.env` 时，提示退回模板引擎，OCR 退回 mock，系统始终可跑。
+
+---
+
+## 2. 目录地图
+
+```
+math/
+├── HANDOFF.md                      ← 本文件
+├── DEVELOPMENT_PLAN.md             ← 蓝图对齐的分阶段路线图（v1）
+├── README.md                       ← ⚠️ 已过时（仍写 p5.js / 手动输入 OCR，待更新）
+├── Designing AI Math Education Software.md, Evolving AI Math.pdf, pdf_content.txt  ← 设计/蓝图原文
+├── lesson/README.md                ← 知识点分类法（考试出题的数据源，见 §5）
+│
+├── web/                            ← 前端（纯静态 HTML+CSS+JS，CDN 加载库，无构建步骤）
+│   ├── index.html                  ← 首页/落地页（含可选登录态导航）
+│   ├── signin.html / signup.html   ← 登录 / 注册
+│   ├── demo_sellection.html        ← 选年级(1–6)+知识点（两张表，可加多个）→ 启动 demo
+│   ├── demo_exam.html              ← 自动出题考试入口（见 §5）
+│   ├── demo_standalone.html        ← 核心辅导界面（白板/OCR/Claude 聊天/提示/动画）+ 考试模式
+│   └── backup/demo_standalone.html ← 旧备份（忽略）
+│
+└── math-tutor-demo/
+    ├── backend/                    ← 后端（FastAPI）
+    │   ├── main.py                 ← ★主程序（2105 行单体，所有路由+核心类）
+    │   ├── config.py               ← .env 加载 + Claude/OCR 配置（自写 dotenv，无 python-dotenv 依赖）
+    │   ├── claude_service.py       ← Claude 网关客户端（urllib，超时/断路器/限速）
+    │   ├── recognize.py            ← nex-n2-pro 视觉 OCR（urllib，含图像预处理）
+    │   ├── prompts.py              ← Claude 系统提示（Socratic 提示 / 聊天 / 出题 JSON）
+    │   ├── auth.py                 ← 账户/会话（SQLite, PBKDF2, 限速）
+    │   ├── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
+    │   ├── requirements.txt        ← 依赖（已移除 easyocr/pytesseract）
+    │   ├── .env                    ← 密钥（gitignore；含真实值）
+    │   ├── .env.example            ← 密钥模板
+    │   ├── data/{users.db,exams.db}← SQLite 数据（gitignore）
+    │   └── app/                    ← ⚠️ 见 §7：未完成的重构脚手架，**未被使用**，建议删除或完成
+    └── frontend/                   ← ⚠️ 早期 React/Vite 脚手架，**未使用**（无 node，跑的是 web/ 静态版）
+```
+
+---
+
+## 3. 后端架构
+
+### 3.1 运行与启动注意
+- **必须从 `backend/` 目录启动**（`uvicorn main:app`），否则报 `Could not import module "main"`。
+- 启动日志会打印三行健康状态：OCR 网关是否配置、用户数、题库题数。
+- 单进程；SQLite 每次操作开新连接（FastAPI 线程池下安全，demo 规模够用）。
+- `@app.post("/recognize")` 用 `run_in_threadpool` 包裹阻塞的 urllib OCR 调用，避免冻结事件循环。
+
+### 3.2 接口清单（全部在 `main.py`）
+| 方法 | 路径 | 作用 | 鉴权 |
+|------|------|------|------|
+| GET | `/` | 服务信息 | 否 |
+| GET | `/problems`, `/problems/random` | 随机练习题（本地题库 + OpenTDB） | 否 |
+| POST | `/recognize` | 手写图片→表达式（nex-n2-pro），含 `status` 字段(ok/empty/timeout/error/unconfigured) | 否 |
+| POST | `/analyze` | 入口分析：SymPy 求解 + Socratic L0 提示（Claude，模板降级），返回 `ai_provider` | 否 |
+| POST | `/hint` | 渐进提示（L1–L4），Claude/模板 | 否 |
+| POST | `/claude/chat` | 自由聊天（以 SymPy 结果为锚），降级返回 `provider:unavailable` | 否 |
+| GET | `/claude/models` | 模型下拉列表 + 可用性 | 否 |
+| POST | `/exam/generate?grade=` | 生成覆盖全部 25 知识点的题集并入库（Claude，模板兜底保证 25/25） | 否 |
+| GET | `/exam/catalogue` | 知识点分类法 + 覆盖率 | 否 |
+| GET | `/exam/questions` | 题库全部题目 | 否 |
+| GET | `/exam/by-tag?tag=&dimension=` | 按标签即时检索题目（SQL 索引） | 否 |
+| POST | `/auth/signup`,`/signin`,`/signout` · GET `/auth/me` | 账户/会话 | Bearer（me/signout） |
+| GET | `/session/{id}`, `/architecture`, `/policies` | 会话/架构元数据/策略 | 否 |
+| POST | `/verify`, `/plot`, `/animate` | SymPy 验证 / 绘图数据 / 模板动画 | 否 |
+
+> **重要**：曾短暂用 `require_user` 给 `/analyze /hint /recognize /claude/chat` 加鉴权，
+> 后**按用户要求移除**（demo 不需登录即可用）。`require_user` / `optional_user` 依赖仍在
+> `main.py` 中定义但未使用，可随时复用。
+
+### 3.3 核心类（均在 `main.py`，蓝图命名）
+- `NeuroSymbolicEngine` — SymPy 求解/化简/验证/分类/步骤生成（**项目最强、最可靠的部分**）。
+- `SocraticEngine` — 5 级提示模板，绝不直接给答案。
+- `PolicyEngine` — 输入级策略校验 + 罚分（SEPGA 的输入侧）。
+- `ExperienceMemory` — **进程内**会话记忆/自适应难度（⚠️ 重启即失，未持久化）。
+- `BlendingInstructions` — 把表达式/会话/动作编译成提示上下文。
+- `Problem` / `OpenTDBProvider` — 练习题模型与外部题源。
+- `ManimAnimator` / `SymPyPlotter` — 模板动画 / 绘图数据（非真渲染）。
+- `ArchitectureNode` + `/architecture` — **手写**的架构元数据树（非自动生成）。
+
+### 3.4 数据存储（SQLite，`backend/data/`）
+- `users.db`：`users`（PBKDF2 盐哈希）、`sessions`（令牌+过期）。
+- `exams.db`：`questions`、`question_tags`（按 `(dimension, tag)` 建索引，支持即时按类型检索）。
+- 当前数据：1 个账户、~150 道题（每次 `/exam/generate` **追加**一套，会累积增长）。
+
+---
+
+## 4. 前端（`web/`，纯静态）
+
+- 无构建步骤；通过 CDN 加载 MathJax、（demo 页）React+Excalidraw。直接浏览器打开即可。
+- 统一调用 `http://localhost:8000`（绝对地址硬编码）。CORS 后端开 `*`。
+- 主题：深色玻璃拟态，Outfit 字体，蓝→紫渐变。各页风格一致。
+- 流程：`index` →（可选 `demo_sellection` 选年级/知识点）→ `demo_standalone`（核心）。
+  另有 `demo_exam`（自动出题）→ "Start the Exam" → 进入 `demo_standalone?exam=1` 分页答题。
+- 登录态存 `localStorage`（`mt_token` / `mt_user`）；登录非强制。
+
+### `demo_standalone.html` 两种模式
+1. **普通**：随机题 + 白板（原生 Canvas / Excalidraw 可切换 + 全屏）+ 提交 OCR + "Solve with Voice/Text" + AI 聊天/提示/SymPy 绘图。
+2. **考试模式**（`?exam=1`）：从 `sessionStorage.mt_exam_questions` 读题，复用题卡+白板 UI，分页（Prev/Next/Exit），每题一个 **"🏷️ Show tags"** 按钮（标签默认隐藏，点击展开两个维度的知识点）。
+
+---
+
+## 5. 考试出题子系统（重点特性）
+
+- **数据源**：`lesson/README.md` 的小学数学六大维度，归并为 **2 个维度/表**：
+  - `核心知识领域`（数与代数·图形与几何·量与计量·统计与概率，17 个标签）
+  - `综合与思想方法`（综合与实践·数学思想方法，8 个标签）= 共 **25 个知识点标签**。
+- **生成**：`POST /exam/generate` 让 Claude 为每个标签出 1 题（每维度 1 次批量调用，返回 JSON 数组），
+  每题可跨维度带多个标签（"一个维度可有多个标签"）。任何漏掉的标签由 `exam.py::TEMPLATES`
+  确定性补齐 → **覆盖率永远 25/25**。
+- **存储/检索**：入库到 `exams.db`，`/exam/by-tag` 经 `(dimension,tag)` 索引即时检索同类题。
+- **前端**：`demo_exam.html` 直接访问即自动生成 → 显示 "Start the Exam" → 跳 `demo_standalone?exam=1` 分页答题，标签隐藏在按钮后。
+- ⚠️ **慢**：一次生成约 **50s+**（网关慢，见 §6），前端有 spinner。
+
+---
+
+## 6. 已知坑 / 重要经验（接手必读）
+
+1. **`nex-n2-pro` 是推理模型**：先输出 `reasoning_content` 再给 `content`。`max_tokens` 太小会在"思考"中耗尽 → `content` 为空。已设 `NEX_OCR_MAX_TOKENS=1500` 并发送 `chat_template_kwargs:{enable_thinking:false}`。
+2. **网关延迟极不稳定**：同一请求见过 5s / 27s / 37s / >150s。是 `computinger.com`（new-api）侧拥塞，非代码问题。`NEX_OCR_TIMEOUT=90`。**不要并发猛打同一 token**（会自我拥塞导致超时）。多智能体/批量调用务必加并发上限与缓存。
+3. **`recognize.py` 输出清洗**：模型常返回 `$$...$$`、`\text{}`、并把字符空格化（"1 5"），清洗器会去 `$`、LaTeX、并删除**所有空格**，使 SymPy 可解析。
+4. **`polyfill.io` 脚本**：`demo_standalone.html` / `demo_exam.html` 的 `<head>` 仍引了已失效的 `polyfill.io` 同步脚本，会**拖死页面加载**。headless 验证时需 abort 它；**建议尽早删除该行**。
+5. **uvicorn 必须在 backend 目录启动**（否则 import 失败）。
+6. **Windows 控制台 cp1252**：用 Python 打印中文会 `UnicodeEncodeError`，调试时加 `PYTHONIOENCODING=utf-8`。
+7. **Git Bash 的 `/tmp` ≠ 可被 Python 直接读的路径**：跨 curl→python 传文件用绝对路径或 stdin 管道。
+8. **`exam_generate` 会累积题目**：每次访问 `demo_exam.html` 都追加一套 25 题。若要"覆盖式"需改 `exam.py`。
+9. **`.env` 含真实密钥且未脱敏**：交接前请轮换 `NEX_OCR_API_KEY` 与 `CLAUDE_API_KEY`。
+
+---
+
+## 7. 待办 / 清理项（给接手者的建议起点）
+
+- [ ] **决定 `app/` 去留**：`backend/app/` 是一个**未完成的分包重构脚手架**（只有空 `__init__.py` + 残留 `.pyc`），`main.py` **完全没引用它**。要么完成"`main.py` 拆分到 `app/` 包"的重构，要么删除以免误导。
+- [ ] **删 `polyfill.io`** 那行 `<script>`（坑 #4）。
+- [ ] **更新 `README.md`**（现状已变：web/ 入口、nex OCR、Claude、auth、exam 都没写）。
+- [ ] **`ExperienceMemory` 持久化**到 SQLite（见 DEVELOPMENT_PLAN 阶段 1）——目前重启即失。
+- [ ] **初始化 git 仓库**（当前**不是 git repo**）。`.gitignore` 已就绪（忽略 `.env`、`data/`、`*.db`、`__pycache__` 等）。
+- [ ] 可选：清理未用的 `math-tutor-demo/frontend/`（React 脚手架，从未启用）。
+- [ ] 安全：`/exam/*`、`/analyze` 等均无鉴权（按设计）；如需多用户隔离再用 `require_user`。
+
+---
+
+## 8. 验证文化（沿用此法）
+
+本项目历来用"**运行并观测真实行为**"验证，而非只跑单测：
+- 后端：`curl` / Python `urllib` 打接口看返回。
+- 前端：headless Chrome（`puppeteer-core`，Chrome 在 `C:/Program Files/Google/Chrome/Application/chrome.exe`）驱动页面、截图、断言 DOM。验证时记得 abort `polyfill.io`。
+- 接手后改任何东西，请同样"跑起来看"，并注意网关慢调用要给足超时。
+
+---
+
+## 9. 关键文件速查
+
+| 想改… | 看这里 |
+|-------|--------|
+| 接口/路由/核心类 | `math-tutor-demo/backend/main.py` |
+| Claude 连接 | `claude_service.py` + `config.py`（`CLAUDE_*`）|
+| 手写 OCR | `recognize.py` + `config.py`（`NEX_OCR_*`）|
+| 提示词（Socratic/聊天/出题） | `prompts.py` |
+| 账户/登录 | `auth.py` + `web/sign{in,up}.html` |
+| 出题/题库/标签 | `exam.py` + `web/demo_exam.html` + `lesson/README.md` |
+| 核心辅导/白板/考试模式 | `web/demo_standalone.html` |
+| 路线图 | `DEVELOPMENT_PLAN.md` |
+```

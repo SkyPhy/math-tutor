@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto-generated exam · AI Math Tutor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] } };</script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        :root {
+            --bg-deep: #0f172a; --accent-blue: #38bdf8; --accent-purple: #818cf8;
+            --glass-bg: rgba(255,255,255,0.05); --glass-border: rgba(255,255,255,0.1);
+            --text-main: #f1f5f9; --text-dim: #94a3b8;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top left, #1e293b, var(--bg-deep));
+            color: var(--text-main); margin: 0; min-height: 100vh; padding: 0 20px 60px;
+        }
+        nav {
+            display: flex; align-items: center; justify-content: space-between;
+            max-width: 900px; margin: 0 auto; padding: 24px 4px;
+        }
+        .brand { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 1.1rem; }
+        .brand .logo {
+            width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); font-size: 1.15rem;
+        }
+        nav a { color: var(--text-dim); text-decoration: none; font-size: 0.95rem; }
+        nav a:hover { color: var(--text-main); }
+
+        header.hd { max-width: 900px; margin: 16px auto 8px; text-align: center; }
+        header.hd h1 { font-weight: 700; font-size: clamp(1.9rem, 5vw, 2.8rem); margin: 0 0 12px; letter-spacing: -0.02em; }
+        header.hd h1 .grad {
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        header.hd p { color: var(--text-dim); font-weight: 300; font-size: 1.05rem; margin: 0 auto; max-width: 600px; }
+
+        main { max-width: 900px; margin: 0 auto; }
+
+        .bar {
+            display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 18px; padding: 18px 22px; margin-top: 24px;
+        }
+        .cov { flex: 1; min-width: 240px; }
+        .cov-label { font-size: 0.9rem; color: var(--text-dim); margin-bottom: 8px; }
+        .cov-label b { color: var(--text-main); }
+        .cov-track { height: 10px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+        .cov-fill { height: 100%; width: 0; border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple)); transition: width 0.5s; }
+        .badge { font-size: 0.78rem; font-weight: 600; padding: 4px 11px; border-radius: 999px; }
+        .badge.ai { background: #e0e7ff; color: #4338ca; }
+        .badge.template { background: #fef3c7; color: #92400e; }
+        .btn-ghost {
+            padding: 11px 20px; border-radius: 12px; cursor: pointer;
+            font-family: inherit; font-size: 0.95rem; font-weight: 600;
+            background: rgba(255,255,255,0.06); border: 1px solid var(--glass-border); color: var(--text-main);
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-ghost:hover { background: rgba(255,255,255,0.12); border-color: var(--accent-blue); }
+        .btn-ghost:disabled { opacity: 0.5; cursor: default; }
+
+        /* Generation / ready panel */
+        .panel {
+            margin-top: 26px; text-align: center;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 22px; padding: 48px 30px;
+        }
+        .spinner {
+            width: 38px; height: 38px; border: 3px solid rgba(255,255,255,0.15);
+            border-top-color: var(--accent-blue); border-radius: 50%;
+            margin: 0 auto 20px; animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .panel .loading-text { color: var(--text-dim); font-weight: 300; }
+        .ready-check {
+            width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 50%;
+            display: grid; place-items: center; font-size: 2rem;
+            background: linear-gradient(135deg, rgba(56,189,248,0.2), rgba(129,140,248,0.2));
+            border: 1px solid rgba(56,189,248,0.4); color: #6ee7b7;
+        }
+        .panel h2 { font-size: 1.6rem; font-weight: 600; margin: 0 0 8px; }
+        .panel .ready-sub { color: var(--text-dim); font-weight: 300; margin: 0 0 28px; }
+        .btn-start {
+            display: inline-flex; align-items: center; gap: 10px;
+            padding: 16px 38px; border-radius: 15px; border: none; cursor: pointer;
+            font-family: inherit; font-size: 1.15rem; font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); color: #0b1020;
+            box-shadow: 0 12px 32px rgba(56,189,248,0.28); transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .btn-start:hover { transform: translateY(-3px); box-shadow: 0 18px 44px rgba(129,140,248,0.42); }
+
+        footer { text-align: center; color: var(--text-dim); font-size: 0.85rem; padding: 40px 20px 0; font-weight: 300; }
+        footer a { color: var(--accent-blue); text-decoration: none; }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <div class="brand"><span class="logo">∑</span><span>AI Math Tutor</span></div>
+        <div><a href="index.html">← Home</a></div>
+    </nav>
+
+    <header class="hd">
+        <h1>Auto-generated <span class="grad">exam</span></h1>
+        <p>The AI generates a question for every knowledge point across both dimensions of the
+            小学数学课程标准. When it's ready, start the exam and work through them one at a time.</p>
+    </header>
+
+    <main>
+        <div class="bar">
+            <div class="cov">
+                <div class="cov-label">Coverage: <b><span id="covCount">0</span>/<span id="covTotal">25</span></b>
+                    knowledge points · bank holds <b id="bankSize">0</b> questions</div>
+                <div class="cov-track"><div class="cov-fill" id="covFill"></div></div>
+            </div>
+            <span class="badge" id="provBadge" style="display:none"></span>
+            <button class="btn-ghost" id="regenBtn" onclick="generateExam()">↻ Regenerate</button>
+        </div>
+
+        <!-- Generation status → becomes the "Start the Exam" panel when ready -->
+        <div class="panel" id="panel">
+            <div class="spinner"></div>
+            <div class="loading-text">Generating the exam… the AI writes one question per knowledge point,
+                so this can take a moment.</div>
+        </div>
+    </main>
+
+    <footer>
+        Questions are stored server-side (SQLite) and indexed by tag · taxonomy from
+        <a href="../lesson/README.md">lesson/README.md</a>.
+    </footer>
+
+    <script>
+        const API = 'http://localhost:8000';
+
+        async function generateExam() {
+            const panel = document.getElementById('panel');
+            const btn = document.getElementById('regenBtn');
+            btn.disabled = true;
+            panel.innerHTML = '<div class="spinner"></div>' +
+                '<div class="loading-text">Generating the exam… the AI writes one question per ' +
+                'knowledge point, so this can take a moment.</div>';
+            try {
+                const resp = await fetch(API + '/exam/generate?grade=4', { method: 'POST' });
+                const data = await resp.json();
+                renderProvider(data.provider);
+                renderCoverage(data.coverage, data.bank_size);
+                // Stash the freshly generated set for the exam runner (demo page).
+                sessionStorage.setItem('mt_exam_questions', JSON.stringify(data.questions));
+                renderReady(data.questions.length, data.coverage);
+            } catch (err) {
+                panel.innerHTML = '<div class="loading-text">Could not reach the backend on port 8000. ' +
+                    'Start it and press Regenerate.</div>';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function renderReady(count, cov) {
+            const panel = document.getElementById('panel');
+            panel.innerHTML =
+                '<div class="ready-check">✓</div>' +
+                '<h2>Exam ready</h2>' +
+                `<p class="ready-sub">${count} questions generated, covering all ` +
+                `${cov.covered_count}/${cov.total} knowledge points.</p>` +
+                '<button class="btn-start" onclick="startExam()">Start the Exam →</button>';
+        }
+
+        // Hand off to the demo, which renders the questions page by page in its
+        // original problem-card + whiteboard form.
+        function startExam() {
+            if (!sessionStorage.getItem('mt_exam_questions')) { generateExam(); return; }
+            window.location.href = 'demo_standalone.html?exam=1';
+        }
+
+        function renderProvider(provider) {
+            const b = document.getElementById('provBadge');
+            b.style.display = 'inline-block';
+            if (provider === 'claude') { b.className = 'badge ai'; b.textContent = '⚡ AI-generated'; }
+            else { b.className = 'badge template'; b.textContent = '📋 Template (AI offline)'; }
+        }
+
+        function renderCoverage(cov, bankSize) {
+            document.getElementById('covCount').textContent = cov.covered_count;
+            document.getElementById('covTotal').textContent = cov.total;
+            document.getElementById('bankSize').textContent = bankSize;
+            document.getElementById('covFill').style.width = (100 * cov.covered_count / cov.total) + '%';
+        }
+
+        // Direct visit → generate immediately.
+        generateExam();
+    </script>
+</body>
+
+</html>

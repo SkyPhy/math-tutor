@@ -1,0 +1,28 @@
+# ── Secrets & local data (never commit) ───────────────────────────────────
+# API keys / gateway config
+math-tutor-demo/backend/.env
+.env
+
+# Persistent data — user accounts/password hashes + exam bank (SQLite)
+math-tutor-demo/backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ── Node (frontend scaffold) ───────────────────────────────────────────────
+node_modules/
+
+# ── OS / editor noise ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

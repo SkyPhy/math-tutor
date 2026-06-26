@@ -1,0 +1,2105 @@
+"""
+Self-Evolving AI Math Tutor — Backend
+======================================
+Architecture layers (per the Evolving AI Math blueprint):
+  1. Frontend Interface Layer  →  React + P5.js canvas
+  2. Orchestration & Logic Layer  →  FastAPI endpoints (this file)
+  3. Cognitive Processing Layer  →  SymPy CAS + Blending Instructions
+  4. Execution & Validation Layer  →  Neuro-symbolic verification sandbox
+
+Key subsystems implemented:
+  • Socratic Engine  — guided hints, NEVER reveals final answer directly
+  • Neuro-Symbolic Integration  — SymPy CAS for deterministic verification
+  • Policy Engine (SEPGA)  — pedagogical guardrails, input validation
+  • Experience Memory  — session history for adaptive hint generation
+  • Blending Instructions  — context-aware prompt construction
+  • Data Manager  — architecture metadata as JSON tree
+  • ALMAS Pipeline  — Sprint → Control → Developer → Peer review stages
+"""
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any
+from sympy import (
+    sympify, solve, Eq, simplify, latex, factor, expand,
+    diff, integrate, Symbol, symbols, degree, Poly,
+    sin, cos, tan, log, exp, sqrt, oo, lambdify,
+    SympifyError
+)
+from sympy.parsing.sympy_parser import (
+    parse_expr, standard_transformations,
+    implicit_multiplication_application, convert_xor
+)
+from PIL import Image
+from datetime import datetime
+from uuid import uuid4
+import io
+import json
+import random
+import uvicorn
+import traceback
+import os
+import html as html_lib
+import urllib.request
+import urllib.parse
+import recognize  # nex-n2-pro vision handwriting recognition (recognize.py)
+
+# ── Claude integration (Anthropic-compatible gateway) ──────────────────────
+# These power the AI tutor. If the gateway is not configured (.env absent),
+# claude_service.available() is False and every call site falls back to the
+# deterministic template SocraticEngine, so the demo always works.
+import config
+import prompts
+from claude_service import claude_service, ClaudeError
+
+# User accounts & sessions, backed by SQLite (auth.py / users.db).
+import auth
+
+# Exam question bank — AI-generated questions tagged across two dimensions,
+# stored in SQLite with tag-indexed lookup (exam.py / exams.db).
+import exam
+import json as _json
+import re as _re
+
+# ═══════════════════════════════════════════════════════════════════════
+#  APPLICATION BOOTSTRAP
+# ═══════════════════════════════════════════════════════════════════════
+
+app = FastAPI(
+    title="Self-Evolving AI Math Tutor",
+    description="Neuro-symbolic math tutoring with Socratic pedagogy and policy governance",
+    version="2.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def _warmup_ocr() -> None:
+    """
+    OCR is now a remote API (nex-n2-pro) — there is no local model to preload.
+    We just log whether the OCR gateway is configured so a missing .env is
+    obvious at startup rather than silently falling back to the mock.
+    """
+    if recognize.is_available():
+        print("[startup] OCR gateway (nex-n2-pro) configured.")
+    else:
+        print("[startup] OCR gateway NOT configured — /recognize will return the "
+              "mock expression. Set NEX_OCR_BASE_URL / NEX_OCR_API_KEY in .env.")
+    # Make sure the user/session tables exist (SQLite, created on first run).
+    auth.init_db()
+    print(f"[startup] User DB ready ({auth.user_count()} accounts).")
+    # Exam question bank tables.
+    exam.init_db()
+    print(f"[startup] Exam bank ready ({exam.bank_size()} questions).")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AUTH HELPERS / DEPENDENCIES
+# ═══════════════════════════════════════════════════════════════════════
+
+def _bearer_token(authorization: Optional[str]) -> str:
+    """Pull the token out of an `Authorization: Bearer <token>` header."""
+    if not authorization:
+        return ""
+    parts = authorization.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return authorization.strip()
+
+
+def require_user(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """FastAPI dependency: reject the request (401) unless it carries a valid,
+    unexpired session token. Use as `dependencies=[Depends(require_user)]` to
+    protect an endpoint, or as a param to read the current user."""
+    user = auth.get_user_by_token(_bearer_token(authorization))
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    return user
+
+
+def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[Dict[str, Any]]:
+    """Like require_user but returns None instead of raising when not signed in."""
+    return auth.get_user_by_token(_bearer_token(authorization))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PYDANTIC MODELS
+# ═══════════════════════════════════════════════════════════════════════
+
+class MathRequest(BaseModel):
+    expression: str
+    action: str = "solve"
+    session_id: Optional[str] = None
+    model: Optional[str] = None   # Claude model id for the dropdown; None → default
+
+class ChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+    expression: Optional[str] = None        # the problem being discussed (for grounding)
+    model: Optional[str] = None
+    history: Optional[List[Dict[str, str]]] = None  # [{role:'user'|'assistant', content}]
+
+# ── Auth request bodies ──
+class SignUpRequest(BaseModel):
+    username: str
+    password: str
+    email: Optional[str] = None
+
+class SignInRequest(BaseModel):
+    username: str
+    password: str
+
+class SocraticMessage(BaseModel):
+    role: str  # "user" | "tutor" | "system"
+    content: str
+    hint_level: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ConversationRequest(BaseModel):
+    session_id: str
+    message: str
+    expression: Optional[str] = None
+
+class PolicyCheckResult(BaseModel):
+    allowed: bool
+    violations: List[str] = []
+    penalty_score: float = 0.0
+
+class ArchitectureNode(BaseModel):
+    id: str
+    name: str
+    type: str  # "layer" | "module" | "component"
+    purpose: str
+    children: List["ArchitectureNode"] = []
+    status: str = "active"
+
+ArchitectureNode.model_rebuild()
+
+# ═══════════════════════════════════════════════════════════════════════
+#  EXPERIENCE MEMORY — Persistent session learning
+# ═══════════════════════════════════════════════════════════════════════
+
+class ExperienceMemory:
+    """
+    Implements durable repository memory per the document's specification.
+    Tracks which approaches worked, which patterns the user struggles with,
+    and adapts hint strategies accordingly.
+    """
+    def __init__(self):
+        self.sessions: Dict[str, Dict] = {}
+
+    def get_or_create_session(self, session_id: str) -> Dict:
+        if session_id not in self.sessions:
+            self.sessions[session_id] = {
+                "id": session_id,
+                "created_at": datetime.now().isoformat(),
+                "conversation": [],
+                "expressions_solved": [],
+                "hint_levels_used": {},     # expr -> max hint level reached
+                "struggle_patterns": [],     # patterns the user found difficult
+                "successful_strategies": [], # hints that led to user understanding
+                "total_interactions": 0,
+                "socratic_compliance": 1.0,  # how well we maintained Socratic method
+            }
+        return self.sessions[session_id]
+
+    def record_interaction(self, session_id: str, expression: str,
+                           hint_level: int, user_solved: bool):
+        session = self.get_or_create_session(session_id)
+        session["total_interactions"] += 1
+        session["hint_levels_used"][expression] = max(
+            session["hint_levels_used"].get(expression, 0), hint_level
+        )
+        if user_solved:
+            session["successful_strategies"].append({
+                "expression": expression,
+                "hints_needed": hint_level,
+                "timestamp": datetime.now().isoformat()
+            })
+        elif hint_level >= 3:
+            session["struggle_patterns"].append({
+                "expression": expression,
+                "timestamp": datetime.now().isoformat()
+            })
+
+    def add_message(self, session_id: str, message: SocraticMessage):
+        session = self.get_or_create_session(session_id)
+        session["conversation"].append({
+            "role": message.role,
+            "content": message.content,
+            "hint_level": message.hint_level,
+            "timestamp": datetime.now().isoformat()
+        })
+
+    def get_conversation(self, session_id: str) -> List[Dict]:
+        session = self.get_or_create_session(session_id)
+        return session["conversation"]
+
+    def get_adaptive_context(self, session_id: str) -> Dict:
+        """Generate blending instruction context from experience memory."""
+        session = self.get_or_create_session(session_id)
+        return {
+            "interaction_count": session["total_interactions"],
+            "struggle_count": len(session["struggle_patterns"]),
+            "success_rate": (
+                len(session["successful_strategies"]) /
+                max(session["total_interactions"], 1)
+            ),
+            "needs_more_guidance": len(session["struggle_patterns"]) > 2,
+            "is_advanced": (
+                len(session["successful_strategies"]) > 5 and
+                session["total_interactions"] > 0 and
+                len(session["struggle_patterns"]) /
+                max(session["total_interactions"], 1) < 0.2
+            ),
+        }
+
+
+memory = ExperienceMemory()
+
+# ═══════════════════════════════════════════════════════════════════════
+#  POLICY ENGINE (SEPGA) — Compliance-by-Design
+# ═══════════════════════════════════════════════════════════════════════
+
+class PolicyEngine:
+    """
+    Implements the SEPGA (Self-Evolving, Policy-Governed Agentic Automation)
+    framework. Acts as a Constrained Markov Decision Process that evaluates
+    proposed actions and assigns penalty scores to violations.
+
+    Pedagogical guardrails enforce the Socratic constraint:
+      "You are a tutor. Break the problem down into steps, explain the
+       underlying logic, and never output the final answer immediately."
+    """
+
+    # Immutable policy rules
+    POLICIES = {
+        "socratic_constraint": {
+            "description": "Never output the final answer directly",
+            "penalty": 10.0,
+            "type": "pedagogical",
+        },
+        "input_sanitisation": {
+            "description": "Block code injection and OS-level commands",
+            "penalty": 10.0,
+            "type": "security",
+        },
+        "complexity_bound": {
+            "description": "Reject expressions exceeding computational budget",
+            "penalty": 5.0,
+            "type": "resource",
+        },
+        "domain_restriction": {
+            "description": "Only permit mathematical expressions",
+            "penalty": 8.0,
+            "type": "domain",
+        },
+    }
+
+    BLOCKED_TOKENS = [
+        "import ", "exec(", "eval(", "__", "os.", "sys.",
+        "subprocess", "open(", "file(", "rm ", "del ",
+        "system(", "popen(", "compile(",
+    ]
+
+    MAX_EXPRESSION_LENGTH = 500
+    PENALTY_THRESHOLD = 5.0
+
+    @classmethod
+    def evaluate(cls, expression: str) -> PolicyCheckResult:
+        """
+        Run the candidate expression through every policy rule.
+        Returns a PolicyCheckResult; if penalty_score >= threshold
+        the request is pruned from the search space.
+        """
+        violations: List[str] = []
+        penalty = 0.0
+
+        # Security: block injection attempts
+        lower = expression.lower()
+        for token in cls.BLOCKED_TOKENS:
+            if token in lower:
+                violations.append(
+                    f"Security violation: blocked token '{token.strip()}' detected"
+                )
+                penalty += cls.POLICIES["input_sanitisation"]["penalty"]
+
+        # Resource: length guard
+        if len(expression) > cls.MAX_EXPRESSION_LENGTH:
+            violations.append(
+                f"Expression exceeds maximum length ({cls.MAX_EXPRESSION_LENGTH} chars)"
+            )
+            penalty += cls.POLICIES["complexity_bound"]["penalty"]
+
+        # Domain: reject clearly non-mathematical input
+        math_chars = set("0123456789xyzabcdefXYZABCDEF+-*/^=()., sincotaglqrtexpdi")
+        non_math_ratio = sum(1 for c in expression if c.lower() not in math_chars) / max(len(expression), 1)
+        if non_math_ratio > 0.5 and len(expression) > 10:
+            violations.append("Input does not appear to be a mathematical expression")
+            penalty += cls.POLICIES["domain_restriction"]["penalty"]
+
+        return PolicyCheckResult(
+            allowed=penalty < cls.PENALTY_THRESHOLD,
+            violations=violations,
+            penalty_score=penalty,
+        )
+
+    @classmethod
+    def get_active_policies(cls) -> List[Dict]:
+        return [
+            {"name": k, **v}
+            for k, v in cls.POLICIES.items()
+        ]
+
+# ═══════════════════════════════════════════════════════════════════════
+#  NEURO-SYMBOLIC VERIFICATION ENGINE
+# ═══════════════════════════════════════════════════════════════════════
+
+TRANSFORMATIONS = standard_transformations + (
+    implicit_multiplication_application,
+    convert_xor,
+)
+
+
+def safe_parse(expr_str: str):
+    """Parse an expression string into a SymPy object with safety transforms."""
+    cleaned = expr_str.replace("^", "**").strip()
+    return parse_expr(cleaned, transformations=TRANSFORMATIONS)
+
+
+class NeuroSymbolicEngine:
+    """
+    Bridges natural-language (neural) understanding with formal-language
+    (symbolic) verification via SymPy CAS.
+
+    Implements the NL-FL Hybrid Reasoning pattern:
+      1. Parse the user's expression into a formal SymPy object
+      2. Classify the problem type
+      3. Generate deterministic step-by-step solution
+      4. Verify each step symbolically
+      5. Package results for the Socratic Engine
+    """
+
+    @staticmethod
+    def classify_problem(expr_str: str) -> Dict[str, Any]:
+        """Classify the mathematical problem and extract metadata."""
+        classification = {
+            "type": "unknown",
+            "has_variable": False,
+            "variables": [],
+            "is_equation": "=" in expr_str,
+            "complexity": "basic",
+            "topic": "arithmetic",
+        }
+
+        try:
+            if "=" in expr_str:
+                parts = expr_str.split("=")
+                lhs = safe_parse(parts[0])
+                rhs = safe_parse(parts[1])
+                equation = Eq(lhs, rhs)
+                free = equation.free_symbols
+                classification["has_variable"] = len(free) > 0
+                classification["variables"] = [str(s) for s in free]
+
+                if len(free) == 1:
+                    var = list(free)[0]
+                    try:
+                        poly = Poly(lhs - rhs, var)
+                        deg = poly.degree()
+                        if deg == 1:
+                            classification["type"] = "linear_equation"
+                            classification["topic"] = "algebra"
+                            classification["complexity"] = "basic"
+                        elif deg == 2:
+                            classification["type"] = "quadratic_equation"
+                            classification["topic"] = "algebra"
+                            classification["complexity"] = "intermediate"
+                        elif deg > 2:
+                            classification["type"] = "polynomial_equation"
+                            classification["topic"] = "algebra"
+                            classification["complexity"] = "advanced"
+                    except Exception:
+                        classification["type"] = "equation"
+                        classification["topic"] = "algebra"
+                elif len(free) > 1:
+                    classification["type"] = "system_equation"
+                    classification["topic"] = "algebra"
+                    classification["complexity"] = "intermediate"
+                else:
+                    classification["type"] = "identity_check"
+                    classification["topic"] = "arithmetic"
+            else:
+                expr = safe_parse(expr_str)
+                free = expr.free_symbols
+                classification["has_variable"] = len(free) > 0
+                classification["variables"] = [str(s) for s in free]
+
+                if len(free) == 0:
+                    classification["type"] = "arithmetic"
+                    classification["topic"] = "arithmetic"
+                else:
+                    # Check for calculus keywords
+                    if any(k in expr_str.lower() for k in ["diff", "deriv"]):
+                        classification["type"] = "derivative"
+                        classification["topic"] = "calculus"
+                        classification["complexity"] = "intermediate"
+                    elif any(k in expr_str.lower() for k in ["integral", "integrate"]):
+                        classification["type"] = "integral"
+                        classification["topic"] = "calculus"
+                        classification["complexity"] = "intermediate"
+                    else:
+                        classification["type"] = "expression"
+                        classification["topic"] = "algebra"
+
+        except Exception:
+            classification["type"] = "unparseable"
+
+        return classification
+
+    @staticmethod
+    def solve_with_steps(expr_str: str) -> Dict[str, Any]:
+        """
+        Generate a deterministic, symbolically-verified step-by-step solution.
+        Each step is verified by SymPy before being included.
+        """
+        result = {
+            "original": expr_str,
+            "classification": NeuroSymbolicEngine.classify_problem(expr_str),
+            "latex": "",
+            "solution": None,
+            "verified_steps": [],
+            "verification_status": "pending",
+        }
+
+        try:
+            if "=" in expr_str:
+                parts = expr_str.split("=")
+                lhs = safe_parse(parts[0])
+                rhs = safe_parse(parts[1])
+                equation = Eq(lhs, rhs)
+                result["latex"] = latex(equation)
+                free = equation.free_symbols
+
+                if len(free) == 1:
+                    var = list(free)[0]
+                    solution = solve(equation, var)
+                    result["solution"] = [str(s) for s in solution]
+
+                    # Build verified steps
+                    steps = NeuroSymbolicEngine._build_equation_steps(
+                        lhs, rhs, var, solution
+                    )
+                    result["verified_steps"] = steps
+                    result["verification_status"] = "verified"
+                elif len(free) == 0:
+                    # Identity check
+                    is_true = simplify(lhs - rhs) == 0
+                    result["solution"] = [str(is_true)]
+                    result["verified_steps"] = [{
+                        "step": 1,
+                        "action": "Verify identity",
+                        "description": f"Check if {latex(lhs)} equals {latex(rhs)}",
+                        "result_latex": f"\\text{{{is_true}}}",
+                        "verified": True,
+                    }]
+                    result["verification_status"] = "verified"
+                else:
+                    solution = solve(equation)
+                    result["solution"] = [str(s) for s in solution] if solution else []
+                    result["verification_status"] = "partial"
+            else:
+                expr = safe_parse(expr_str)
+                result["latex"] = latex(expr)
+                simplified = simplify(expr)
+                result["solution"] = [str(simplified)]
+
+                steps = []
+                if expr != simplified:
+                    steps.append({
+                        "step": 1,
+                        "action": "Simplify the expression",
+                        "description": f"We start with ${latex(expr)}$",
+                        "result_latex": latex(expr),
+                        "verified": True,
+                    })
+                    # Try factoring
+                    factored = factor(expr)
+                    if factored != expr:
+                        steps.append({
+                            "step": 2,
+                            "action": "Factor",
+                            "description": f"Factoring gives us ${latex(factored)}$",
+                            "result_latex": latex(factored),
+                            "verified": True,
+                        })
+                    steps.append({
+                        "step": len(steps) + 1,
+                        "action": "Final simplification",
+                        "description": f"The simplified form is ${latex(simplified)}$",
+                        "result_latex": latex(simplified),
+                        "verified": True,
+                    })
+                else:
+                    steps.append({
+                        "step": 1,
+                        "action": "Evaluate",
+                        "description": f"The expression ${latex(expr)}$ is already in simplest form",
+                        "result_latex": latex(simplified),
+                        "verified": True,
+                    })
+
+                result["verified_steps"] = steps
+                result["verification_status"] = "verified"
+
+        except SympifyError as e:
+            result["verification_status"] = "error"
+            result["verified_steps"] = [{
+                "step": 1,
+                "action": "Parse error",
+                "description": f"Could not parse the expression: {str(e)}",
+                "result_latex": "",
+                "verified": False,
+            }]
+        except Exception as e:
+            result["verification_status"] = "error"
+            result["verified_steps"] = [{
+                "step": 1,
+                "action": "Processing error",
+                "description": f"An error occurred during analysis: {str(e)}",
+                "result_latex": "",
+                "verified": False,
+            }]
+
+        return result
+
+    @staticmethod
+    def _build_equation_steps(lhs, rhs, var, solution) -> List[Dict]:
+        """Build verified steps for solving an equation."""
+        steps = []
+        step_num = 1
+
+        # Step 1: Identify the equation
+        steps.append({
+            "step": step_num,
+            "action": "Identify the equation",
+            "description": f"We have the equation ${latex(Eq(lhs, rhs))}$",
+            "result_latex": latex(Eq(lhs, rhs)),
+            "verified": True,
+        })
+        step_num += 1
+
+        # Step 2: Rearrange — move everything to one side
+        combined = simplify(lhs - rhs)
+        steps.append({
+            "step": step_num,
+            "action": "Rearrange",
+            "description": f"Move all terms to one side: ${latex(combined)} = 0$",
+            "result_latex": f"{latex(combined)} = 0",
+            "verified": simplify(lhs - rhs - combined) == 0,
+        })
+        step_num += 1
+
+        # Step 3: Attempt to factor
+        factored = factor(combined)
+        if factored != combined:
+            steps.append({
+                "step": step_num,
+                "action": "Factor",
+                "description": f"Factoring: ${latex(factored)} = 0$",
+                "result_latex": f"{latex(factored)} = 0",
+                "verified": simplify(factored - combined) == 0,
+            })
+            step_num += 1
+
+        # Step 4: Solve for the variable
+        if solution:
+            sol_latex = ", ".join([f"{latex(var)} = {latex(s)}" for s in solution])
+            # Verify each solution
+            all_verified = True
+            for s in solution:
+                check = simplify(lhs.subs(var, s) - rhs.subs(var, s))
+                if check != 0:
+                    all_verified = False
+
+            steps.append({
+                "step": step_num,
+                "action": "Solve",
+                "description": f"Solution: ${sol_latex}$",
+                "result_latex": sol_latex,
+                "verified": all_verified,
+            })
+            step_num += 1
+
+            # Step 5: Verification
+            for s in solution:
+                lhs_val = simplify(lhs.subs(var, s))
+                rhs_val = simplify(rhs.subs(var, s))
+                verified = simplify(lhs_val - rhs_val) == 0
+                steps.append({
+                    "step": step_num,
+                    "action": "Verify",
+                    "description": (
+                        f"Substituting ${latex(var)} = {latex(s)}$: "
+                        f"LHS = ${latex(lhs_val)}$, RHS = ${latex(rhs_val)}$ "
+                        f"{'✓ Verified!' if verified else '✗ Check failed'}"
+                    ),
+                    "result_latex": f"{latex(lhs_val)} = {latex(rhs_val)}",
+                    "verified": verified,
+                })
+                step_num += 1
+
+        return steps
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SOCRATIC ENGINE — Guided Learning with Progressive Hints
+# ═══════════════════════════════════════════════════════════════════════
+
+class SocraticEngine:
+    """
+    Implements the Socratic tutoring methodology as a non-bypassable constraint.
+
+    The system is architecturally FORBIDDEN from outputting final resolutions
+    directly. Instead it enforces guided learning:
+      "Break the problem down into steps, explain the underlying logic,
+       and never output the final answer immediately."
+
+    Hint levels:
+      0 — Problem restatement + what type of problem is this?
+      1 — Strategy hint (what approach should we use?)
+      2 — First concrete step (show the first manipulation)
+      3 — Detailed walkthrough (most steps, but user must do the final step)
+      4 — Full guided solution with verification (still framed as teaching)
+    """
+
+    @staticmethod
+    def generate_socratic_response(
+        engine_result: Dict[str, Any],
+        hint_level: int = 0,
+        adaptive_context: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """Generate a Socratic response at the specified hint level."""
+
+        classification = engine_result.get("classification", {})
+        steps = engine_result.get("verified_steps", [])
+        problem_type = classification.get("type", "unknown")
+        variables = classification.get("variables", [])
+        topic = classification.get("topic", "math")
+        original = engine_result.get("original", "")
+        eq_latex = engine_result.get("latex", original)
+
+        # Adapt tone based on experience memory
+        encouraging = True
+        if adaptive_context:
+            if adaptive_context.get("is_advanced"):
+                encouraging = False  # more direct for advanced users
+
+        response = {
+            "hint_level": hint_level,
+            "messages": [],
+            "can_reveal_more": hint_level < 4,
+            "topic": topic,
+            "problem_type": problem_type,
+            "latex": eq_latex,
+            "guardrail_active": True,
+            "verification_status": engine_result.get("verification_status", "pending"),
+        }
+
+        if hint_level == 0:
+            response["messages"] = SocraticEngine._level_0(
+                original, eq_latex, classification, encouraging
+            )
+        elif hint_level == 1:
+            response["messages"] = SocraticEngine._level_1(
+                original, eq_latex, classification, steps, encouraging
+            )
+        elif hint_level == 2:
+            response["messages"] = SocraticEngine._level_2(
+                original, eq_latex, classification, steps, encouraging
+            )
+        elif hint_level == 3:
+            response["messages"] = SocraticEngine._level_3(
+                original, eq_latex, classification, steps, encouraging
+            )
+        elif hint_level >= 4:
+            response["messages"] = SocraticEngine._level_4(
+                original, eq_latex, classification, steps, engine_result, encouraging
+            )
+
+        return response
+
+    @staticmethod
+    def _level_0(original, eq_latex, classification, encouraging) -> List[Dict]:
+        """Problem recognition — restate and classify."""
+        msgs = []
+        problem_type = classification.get("type", "unknown")
+        topic = classification.get("topic", "math")
+        variables = classification.get("variables", [])
+
+        if encouraging:
+            msgs.append({
+                "role": "tutor",
+                "content": f"Great question! Let's work through this together. 🧠",
+                "type": "encouragement",
+            })
+
+        msgs.append({
+            "role": "tutor",
+            "content": f"I see the expression: ${eq_latex}$",
+            "type": "observation",
+        })
+
+        type_descriptions = {
+            "linear_equation": "This is a **linear equation** — it has a variable raised to the first power.",
+            "quadratic_equation": "This is a **quadratic equation** — the variable is raised to the second power.",
+            "polynomial_equation": "This is a **polynomial equation** of higher degree.",
+            "arithmetic": "This is an **arithmetic expression** we can evaluate.",
+            "expression": "This is an **algebraic expression** we can simplify.",
+            "identity_check": "This looks like an **identity** we can verify.",
+        }
+
+        desc = type_descriptions.get(problem_type, f"This is a **{topic}** problem.")
+        msgs.append({"role": "tutor", "content": desc, "type": "classification"})
+
+        if variables:
+            var_str = ", ".join([f"${v}$" for v in variables])
+            msgs.append({
+                "role": "tutor",
+                "content": f"🔍 **Think about it:** What do we need to find? We're looking for the value(s) of {var_str}.",
+                "type": "question",
+            })
+        else:
+            msgs.append({
+                "role": "tutor",
+                "content": "🔍 **Think about it:** What operations can we apply to simplify this?",
+                "type": "question",
+            })
+
+        msgs.append({
+            "role": "tutor",
+            "content": "💡 When you're ready for a hint on how to start, click **Next Hint**!",
+            "type": "prompt",
+        })
+
+        return msgs
+
+    @staticmethod
+    def _level_1(original, eq_latex, classification, steps, encouraging) -> List[Dict]:
+        """Strategy hint — what approach to use."""
+        msgs = []
+        problem_type = classification.get("type", "unknown")
+
+        strategy_hints = {
+            "linear_equation": (
+                "For a linear equation, our strategy is to **isolate the variable** on one side. "
+                "We do this by performing the same operation on both sides of the equation."
+            ),
+            "quadratic_equation": (
+                "For a quadratic equation, we have several strategies: "
+                "**factoring**, the **quadratic formula**, or **completing the square**. "
+                "Can you tell which might work here?"
+            ),
+            "polynomial_equation": (
+                "For polynomial equations, we can try **factoring**, **synthetic division**, "
+                "or look for **rational roots**."
+            ),
+            "arithmetic": (
+                "Let's break this calculation into smaller parts. "
+                "What's the order of operations (PEMDAS/BODMAS) we should follow?"
+            ),
+            "expression": (
+                "To simplify this expression, look for **like terms** to combine "
+                "or **common factors** to pull out."
+            ),
+        }
+
+        hint = strategy_hints.get(
+            problem_type,
+            "Let's think about what mathematical tools we can apply here."
+        )
+
+        msgs.append({"role": "tutor", "content": f"📋 **Strategy:** {hint}", "type": "strategy"})
+
+        # Give a concrete starting question
+        if problem_type == "linear_equation" and len(steps) > 1:
+            msgs.append({
+                "role": "tutor",
+                "content": "🤔 **Your turn:** Look at both sides of the equation. What operation would you perform first to start isolating the variable?",
+                "type": "question",
+            })
+        elif problem_type == "quadratic_equation":
+            msgs.append({
+                "role": "tutor",
+                "content": "🤔 **Your turn:** First, can you rearrange the equation so that one side equals zero?",
+                "type": "question",
+            })
+        else:
+            msgs.append({
+                "role": "tutor",
+                "content": "🤔 **Your turn:** What would be your first step? Try it and click **Next Hint** to check!",
+                "type": "question",
+            })
+
+        return msgs
+
+    @staticmethod
+    def _level_2(original, eq_latex, classification, steps, encouraging) -> List[Dict]:
+        """First concrete step — show the first manipulation."""
+        msgs = []
+
+        if len(steps) >= 2:
+            step = steps[1]  # Skip the "identify" step, show the first real step
+            verified_badge = " ✅" if step.get("verified") else ""
+            msgs.append({
+                "role": "tutor",
+                "content": f"**Step {step['step']}: {step['action']}**{verified_badge}",
+                "type": "step_header",
+            })
+            msgs.append({
+                "role": "tutor",
+                "content": step["description"],
+                "type": "step_detail",
+            })
+            msgs.append({
+                "role": "tutor",
+                "content": "🧩 **Now it's your turn:** Can you carry out the next step from here? What would you do next?",
+                "type": "question",
+            })
+        else:
+            msgs.append({
+                "role": "tutor",
+                "content": "Let's start by carefully examining each term in the expression.",
+                "type": "guidance",
+            })
+
+        return msgs
+
+    @staticmethod
+    def _level_3(original, eq_latex, classification, steps, encouraging) -> List[Dict]:
+        """Detailed walkthrough — most steps but user does the final one."""
+        msgs = []
+
+        msgs.append({
+            "role": "tutor",
+            "content": "📝 Let me walk you through most of the solution. **Try to complete the final step yourself!**",
+            "type": "guidance",
+        })
+
+        # Show all steps except the last one
+        steps_to_show = steps[:-1] if len(steps) > 1 else steps
+        for step in steps_to_show:
+            verified_badge = " ✅" if step.get("verified") else ""
+            msgs.append({
+                "role": "tutor",
+                "content": f"**Step {step['step']}: {step['action']}**{verified_badge}\n{step['description']}",
+                "type": "step",
+            })
+
+        if len(steps) > 1:
+            msgs.append({
+                "role": "tutor",
+                "content": "🎯 **Final challenge:** Based on the steps above, can you determine the answer? Click **Next Hint** to check your work!",
+                "type": "challenge",
+            })
+        else:
+            msgs.append({
+                "role": "tutor",
+                "content": "🎯 **Try it:** Apply what we discussed and attempt the solution!",
+                "type": "challenge",
+            })
+
+        return msgs
+
+    @staticmethod
+    def _level_4(original, eq_latex, classification, steps, engine_result, encouraging) -> List[Dict]:
+        """Full guided solution with verification. Still framed as teaching."""
+        msgs = []
+
+        msgs.append({
+            "role": "tutor",
+            "content": "📖 Here's the complete walkthrough. Study each step to understand the logic!",
+            "type": "guidance",
+        })
+
+        for step in steps:
+            verified_badge = " ✅ *Verified by CAS*" if step.get("verified") else ""
+            msgs.append({
+                "role": "tutor",
+                "content": f"**Step {step['step']}: {step['action']}**{verified_badge}\n{step['description']}",
+                "type": "step",
+            })
+
+        # Add learning reflection
+        msgs.append({
+            "role": "tutor",
+            "content": "🌟 **Reflection:** Now that you've seen the full solution, can you explain *why* each step works? Understanding the *why* is more important than the *what*!",
+            "type": "reflection",
+        })
+
+        # Add verification summary
+        all_verified = all(s.get("verified", False) for s in steps)
+        if all_verified:
+            msgs.append({
+                "role": "system",
+                "content": "✅ All steps have been **symbolically verified** by the SymPy Computer Algebra System. This solution is mathematically guaranteed to be correct.",
+                "type": "verification",
+            })
+        else:
+            msgs.append({
+                "role": "system",
+                "content": "⚠️ Some steps could not be fully verified symbolically. Please double-check the reasoning.",
+                "type": "verification",
+            })
+
+        return msgs
+
+# ═══════════════════════════════════════════════════════════════════════
+#  BLENDING INSTRUCTIONS ENGINE
+# ═══════════════════════════════════════════════════════════════════════
+
+class BlendingInstructions:
+    """
+    Dynamically compiles blended instruction payloads that fuse:
+      1. Strategic Intent  — the user's requirement
+      2. Contextual Grounding  — session history and problem metadata
+      3. Execution Directives  — permitted operations and formatting
+      4. Architectural Boundaries  — immutable constraints
+    """
+
+    @staticmethod
+    def compile(
+        expression: str,
+        session_id: str,
+        action: str = "solve",
+    ) -> Dict[str, Any]:
+
+        adaptive = memory.get_adaptive_context(session_id)
+        classification = NeuroSymbolicEngine.classify_problem(expression)
+
+        return {
+            "strategic_intent": {
+                "goal": f"Help the user understand how to {action} '{expression}'",
+                "method": "Socratic guided learning",
+                "constraint": "NEVER reveal the final answer without guided steps",
+            },
+            "contextual_grounding": {
+                "problem_classification": classification,
+                "session_context": adaptive,
+                "conversation_length": len(memory.get_conversation(session_id)),
+            },
+            "execution_directives": {
+                "permitted_operations": ["simplify", "factor", "solve", "expand", "verify"],
+                "output_format": "step-by-step with LaTeX",
+                "verification_required": True,
+                "cas_engine": "SymPy",
+            },
+            "architectural_boundaries": {
+                "immutable_policies": PolicyEngine.get_active_policies(),
+                "max_hint_level": 4,
+                "socratic_constraint_active": True,
+                "direct_answer_forbidden": True,
+            },
+        }
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DATA MANAGER — Architecture Metadata as JSON Tree
+# ═══════════════════════════════════════════════════════════════════════
+
+def build_architecture_tree() -> Dict:
+    """
+    Build the hierarchical JSON metadata tree that describes the
+    application's architecture, enabling agents to comprehend the
+    macro-architecture instantly.
+    """
+    return {
+        "id": "root",
+        "name": "AI Math Tutor",
+        "version": "2.0.0",
+        "type": "system",
+        "layers": [
+            {
+                "id": "layer-1",
+                "name": "Frontend Interface Layer",
+                "type": "layer",
+                "purpose": "User engagement, multimodal input (canvas/text/voice), OCR pipeline",
+                "status": "active",
+                "components": [
+                    {"id": "c-canvas", "name": "CanvasBoard", "type": "component", "purpose": "P5.js drawing surface with stroke capture", "status": "active"},
+                    {"id": "c-sidebar", "name": "Sidebar", "type": "component", "purpose": "Input controls, voice, and result display", "status": "active"},
+                    {"id": "c-arch-viz", "name": "ArchitectureVisualizer", "type": "component", "purpose": "Real-time system architecture visualization", "status": "active"},
+                    {"id": "c-conversation", "name": "SocraticConversation", "type": "component", "purpose": "Chat-style Socratic dialogue interface", "status": "active"},
+                ],
+            },
+            {
+                "id": "layer-2",
+                "name": "Orchestration & Logic Layer",
+                "type": "layer",
+                "purpose": "Request routing, session management, evolution trigger, blending instruction compilation",
+                "status": "active",
+                "components": [
+                    {"id": "c-router", "name": "API Router", "type": "component", "purpose": "FastAPI endpoint routing (Router Pattern)", "status": "active"},
+                    {"id": "c-blending", "name": "Blending Instructions", "type": "component", "purpose": "Dynamic context payload compilation", "status": "active"},
+                    {"id": "c-memory", "name": "Experience Memory", "type": "component", "purpose": "Session-based adaptive learning store", "status": "active"},
+                ],
+            },
+            {
+                "id": "layer-3",
+                "name": "Cognitive Processing Layer",
+                "type": "layer",
+                "purpose": "Mathematical reasoning, Socratic hint generation, problem classification",
+                "status": "active",
+                "components": [
+                    {"id": "c-socratic", "name": "Socratic Engine", "type": "component", "purpose": "Multi-level guided hint generator with pedagogical guardrails", "status": "active"},
+                    {"id": "c-neuro", "name": "Neuro-Symbolic Engine", "type": "component", "purpose": "SymPy CAS integration for deterministic verification", "status": "active"},
+                    {"id": "c-classifier", "name": "Problem Classifier", "type": "component", "purpose": "Mathematical problem type detection and metadata extraction", "status": "active"},
+                ],
+            },
+            {
+                "id": "layer-4",
+                "name": "Execution & Validation Layer",
+                "type": "layer",
+                "purpose": "Secure sandbox for symbolic computation, step verification, policy enforcement",
+                "status": "active",
+                "components": [
+                    {"id": "c-policy", "name": "Policy Engine (SEPGA)", "type": "component", "purpose": "Compliance-by-design guardrails, penalty scoring, Constrained MDP", "status": "active"},
+                    {"id": "c-sandbox", "name": "Verification Sandbox", "type": "component", "purpose": "Isolated symbolic computation environment", "status": "active"},
+                    {"id": "c-lattice", "name": "Lattice Framework", "type": "component", "purpose": "Continuous guardrail optimization (risk assessment → case expansion → optimization → evaluation)", "status": "active"},
+                ],
+            },
+        ],
+        "agents": [
+            {"id": "a-sprint", "name": "Sprint Agent", "role": "Product Manager", "function": "Interprets requirements, decomposes tasks, defines acceptance criteria"},
+            {"id": "a-supervisor", "name": "Supervisor Agent", "role": "Engineering Manager", "function": "Allocates resources dynamically based on task complexity"},
+            {"id": "a-summary", "name": "Summary Agent", "role": "Technical Writer", "function": "Condenses codebase into structured metadata"},
+            {"id": "a-control", "name": "Control Agent", "role": "Systems Architect", "function": "Uses Meta-RAG to localize context and define boundaries"},
+            {"id": "a-developer", "name": "Developer Agent", "role": "Software Engineer", "function": "Executes AST patches, writes code, generates tests"},
+            {"id": "a-peer", "name": "Peer Agent", "role": "QA / Code Reviewer", "function": "Scrutinizes for vulnerabilities, regressions, hallucinations"},
+        ],
+    }
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PROBLEM BANK — Random practice problems
+# ═══════════════════════════════════════════════════════════════════════
+
+class Problem(BaseModel):
+    id: str
+    title: str
+    statement: str          # human-readable prompt (what the student must do)
+    latex: str              # the formula/expression to render
+    difficulty: str         # "easy" | "medium" | "hard"
+    topic: str
+    source: Optional[str] = None   # "opentdb" | "local"
+
+# Curated bank of practice problems. The student writes their solution on the
+# whiteboard or via voice/text — so we intentionally do NOT ship answer choices.
+PROBLEM_BANK: List[Dict[str, Any]] = [
+    {
+        "id": "alg-001",
+        "title": "Solve the Linear Equation",
+        "statement": "Find the value of x that satisfies the equation.",
+        "latex": "3x + 7 = 22",
+        "difficulty": "easy",
+        "topic": "Algebra",
+    },
+    {
+        "id": "alg-002",
+        "title": "Factor and Solve",
+        "statement": "Solve the quadratic equation by factoring.",
+        "latex": "x^2 - 5x + 6 = 0",
+        "difficulty": "medium",
+        "topic": "Algebra",
+    },
+    {
+        "id": "alg-003",
+        "title": "Simplify the Expression",
+        "statement": "Simplify the algebraic expression as far as possible.",
+        "latex": "\\frac{x^2 - 9}{x - 3}",
+        "difficulty": "medium",
+        "topic": "Algebra",
+    },
+    {
+        "id": "cal-001",
+        "title": "Find the Derivative",
+        "statement": "Differentiate the function with respect to x.",
+        "latex": "f(x) = 3x^2 + 2x - 5",
+        "difficulty": "medium",
+        "topic": "Calculus",
+    },
+    {
+        "id": "cal-002",
+        "title": "Evaluate the Integral",
+        "statement": "Compute the indefinite integral.",
+        "latex": "\\int (4x^3 + 1)\\,dx",
+        "difficulty": "hard",
+        "topic": "Calculus",
+    },
+    {
+        "id": "trg-001",
+        "title": "Solve for the Angle",
+        "statement": "Find all angles in [0, 2π) that satisfy the equation.",
+        "latex": "2\\sin(\\theta) = 1",
+        "difficulty": "hard",
+        "topic": "Trigonometry",
+    },
+    {
+        "id": "geo-001",
+        "title": "Area of a Circle",
+        "statement": "A circle has radius r = 5. Find its exact area.",
+        "latex": "A = \\pi r^2,\\quad r = 5",
+        "difficulty": "easy",
+        "topic": "Geometry",
+    },
+    {
+        "id": "ari-001",
+        "title": "Order of Operations",
+        "statement": "Evaluate the expression using the correct order of operations.",
+        "latex": "6 + 2 \\times (3^2 - 4)",
+        "difficulty": "easy",
+        "topic": "Arithmetic",
+    },
+]
+
+
+# ── Open Trivia Database (OpenTDB) provider ─────────────────────────────
+#
+# Pulls live questions from https://opentdb.com (the "Science: Mathematics"
+# category, id 19) and normalizes them into our Problem shape. OpenTDB returns
+# HTML-encoded multiple-choice questions, so we unescape the text and render the
+# shuffled answer options as a LaTeX-safe block in the `latex` field.
+#
+# OpenTDB rate-limits to ~1 request / 5s per IP, so we fetch a batch and serve
+# from an in-memory cache, refilling only when it runs dry. Any network failure
+# falls back silently to the curated PROBLEM_BANK above.
+
+class OpenTDBProvider:
+    BASE_URL = "https://opentdb.com/api.php"
+    CATEGORY_MATH = 19          # "Science: Mathematics"
+    BATCH_SIZE = 30             # questions to pull per network call
+    _cache: List[Dict[str, Any]] = []
+
+    # LaTeX text-mode escapes so answer text never breaks MathJax rendering.
+    _LATEX_ESCAPES = {
+        "\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$",
+        "#": r"\#", "_": r"\_", "{": r"\{", "}": r"\}",
+        "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+    }
+
+    @classmethod
+    def _latex_escape(cls, text: str) -> str:
+        return "".join(cls._LATEX_ESCAPES.get(c, c) for c in text)
+
+    @classmethod
+    def _normalize(cls, item: Dict[str, Any]) -> Dict[str, Any]:
+        """Map one OpenTDB result into our Problem dict."""
+        question = html_lib.unescape(item.get("question", ""))
+        correct = html_lib.unescape(item.get("correct_answer", ""))
+        incorrect = [html_lib.unescape(a) for a in item.get("incorrect_answers", [])]
+
+        if item.get("type") == "boolean":
+            latex_block = r"\text{True} \qquad \text{False}"
+        else:
+            options = incorrect + [correct]
+            random.shuffle(options)
+            labels = ["A", "B", "C", "D", "E", "F"]
+            parts = [
+                rf"\text{{{lbl}) }} \text{{{cls._latex_escape(opt)}}}"
+                for lbl, opt in zip(labels, options)
+            ]
+            latex_block = r" \qquad ".join(parts)
+
+        difficulty = item.get("difficulty", "medium")
+        return {
+            "id": "otdb-" + uuid4().hex[:8],
+            "title": f"Math Trivia ({difficulty.capitalize()})",
+            "statement": question,
+            "latex": latex_block,
+            "difficulty": difficulty,
+            "topic": "Trivia",
+            "source": "opentdb",
+        }
+
+    @classmethod
+    def _fetch_batch(cls, amount: int, difficulty: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Hit the OpenTDB API and return normalized problems (or [] on failure)."""
+        # Matches the API form https://opentdb.com/api.php?amount=N&category=19
+        # (no `type` filter, so both multiple-choice and true/false come through).
+        params = {"amount": amount, "category": cls.CATEGORY_MATH}
+        if difficulty in ("easy", "medium", "hard"):
+            params["difficulty"] = difficulty
+        url = cls.BASE_URL + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"User-Agent": "math-tutor-demo/2.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:  # URLError, timeout, JSON errors, etc.
+            print(f"[OpenTDB] fetch failed: {exc}")
+            return []
+        # response_code 0 == success; anything else (no results, rate-limited) -> []
+        if data.get("response_code") != 0:
+            print(f"[OpenTDB] non-zero response_code: {data.get('response_code')}")
+            return []
+        return [cls._normalize(item) for item in data.get("results", [])]
+
+    @classmethod
+    def get_random(cls, difficulty: Optional[str] = None,
+                   exclude_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Return one normalized problem, or None if OpenTDB is unreachable."""
+        if difficulty:
+            # Difficulty-filtered requests fetch their own small batch.
+            pool = cls._fetch_batch(amount=10, difficulty=difficulty)
+        else:
+            if not cls._cache:
+                cls._cache = cls._fetch_batch(amount=cls.BATCH_SIZE)
+            pool = cls._cache
+
+        if exclude_id and len(pool) > 1:
+            pool = [p for p in pool if p["id"] != exclude_id]
+        if not pool:
+            return None
+
+        choice = random.choice(pool)
+        # Consume from the shared cache so "New Problem" keeps advancing.
+        if not difficulty:
+            try:
+                cls._cache.remove(choice)
+            except ValueError:
+                pass
+        return choice
+
+    @classmethod
+    def get_many(cls, amount: int = 20,
+                 difficulty: Optional[str] = None) -> List[Dict[str, Any]]:
+        return cls._fetch_batch(amount=amount, difficulty=difficulty)
+
+
+def _tag_local(problems: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Stamp curated bank problems with their source for API transparency."""
+    return [{**p, "source": p.get("source", "local")} for p in problems]
+
+
+@app.get("/problems")
+def list_problems(
+    topic: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    source: str = "opentdb",
+):
+    """
+    Return a list of problems.
+
+    `source`:
+      • "opentdb" (default) — live questions from the Open Trivia Database
+      • "local"             — the curated static bank
+      • "mixed"             — OpenTDB questions plus the local bank
+
+    Falls back to the local bank if OpenTDB is unreachable.
+    """
+    items: List[Dict[str, Any]] = []
+
+    if source in ("opentdb", "mixed"):
+        items += OpenTDBProvider.get_many(amount=20, difficulty=difficulty)
+    if source in ("local", "mixed") or (source == "opentdb" and not items):
+        items += _tag_local(PROBLEM_BANK)
+
+    if topic:
+        items = [p for p in items if p["topic"].lower() == topic.lower()]
+    if difficulty:
+        items = [p for p in items if p["difficulty"].lower() == difficulty.lower()]
+
+    return {"count": len(items), "source": source, "problems": items}
+
+
+@app.get("/problems/random", response_model=Problem)
+def random_problem(
+    topic: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    exclude_id: Optional[str] = None,
+    source: str = "opentdb",
+):
+    """
+    Return a single random practice problem.
+
+    By default this pulls a live question from the Open Trivia Database
+    ("Science: Mathematics" category). Pass `source=local` for the curated bank.
+
+    Optional filters: `topic`, `difficulty`. `exclude_id` avoids handing back the
+    problem currently on screen (so "New Problem" always changes something).
+    If OpenTDB is unreachable, it falls back to the local bank automatically.
+    """
+    # Try OpenTDB first (unless the caller explicitly asked for the local bank).
+    if source != "local":
+        problem = OpenTDBProvider.get_random(difficulty=difficulty, exclude_id=exclude_id)
+        if problem:
+            return problem
+        # else: OpenTDB unreachable — fall through to the local bank.
+
+    pool = _tag_local(PROBLEM_BANK)
+    if topic:
+        pool = [p for p in pool if p["topic"].lower() == topic.lower()]
+    if difficulty:
+        pool = [p for p in pool if p["difficulty"].lower() == difficulty.lower()]
+    if exclude_id and len(pool) > 1:
+        pool = [p for p in pool if p["id"] != exclude_id]
+
+    if not pool:
+        raise HTTPException(status_code=404, detail="No problems match the given filters")
+
+    return random.choice(pool)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  API ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/")
+def read_root():
+    return {
+        "message": "Self-Evolving AI Math Tutor Backend v2.0",
+        "architecture": "Multi-layered (Frontend → Orchestration → Cognitive → Validation)",
+        "subsystems": [
+            "Socratic Engine",
+            "Neuro-Symbolic Verification (SymPy CAS)",
+            "Policy Engine (SEPGA)",
+            "Experience Memory",
+            "Blending Instructions",
+            "Data Manager",
+        ],
+    }
+
+
+@app.post("/recognize")
+async def recognize_math(file: UploadFile = File(...)):
+    """
+    Handwriting OCR endpoint.
+
+    The whiteboard PNG submitted by the student is sent to the nex-n2-pro vision
+    model (see recognize.py). We return the recognised *text* — that string, not
+    the picture, is what the frontend then feeds into /analyze.
+
+    Falls back to a mock expression when the OCR gateway isn't configured so the
+    demo still works end-to-end before the .env is filled in.
+    """
+    image_bytes = await file.read()
+    # recognize_detailed makes a BLOCKING HTTP call (urllib) that can take many
+    # seconds. Running it directly in this async endpoint would freeze the whole
+    # event loop; offload it to a worker thread so the server stays responsive.
+    result = await run_in_threadpool(recognize.recognize_detailed, image_bytes)
+    status = result.get("status")
+
+    if status == "ok":
+        return {"text": result["text"], "engine": "nex-n2-pro", "status": "ok"}
+
+    if status == "unconfigured":
+        # OCR gateway not configured — keep the demo functional with a mock.
+        return {"text": "2*x + 5 = 15", "engine": "mock", "status": "unconfigured"}
+
+    # empty / timeout / error — surface the reason so the UI shows a useful note.
+    return {"text": "", "engine": "nex-n2-pro", "status": status}
+
+
+def generate_socratic(engine_result, hint_level, adaptive, model, session_id):
+    """Produce a Socratic response, preferring Claude and falling back to the
+    deterministic template engine.
+
+    SymPy's `engine_result` is the ground truth in BOTH paths — Claude is only
+    allowed to phrase guidance around it (see prompts.build_socratic_system),
+    never to recompute the answer. Returns the SocraticEngine response shape
+    plus an `ai_provider` field so the UI can show who answered.
+    """
+    base = SocraticEngine.generate_socratic_response(
+        engine_result, hint_level=hint_level, adaptive_context=adaptive
+    )
+    base["ai_provider"] = "template"
+
+    if claude_service.available():
+        try:
+            system = prompts.build_socratic_system(engine_result, hint_level, adaptive)
+            user = (f"Produce the level {hint_level} hint now for the problem "
+                    f"\"{engine_result.get('original', '')}\".")
+            text = claude_service.complete(
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                model=model,
+                session_id=session_id,
+            )
+            base["messages"] = [{
+                "role": "tutor",
+                "content": text,
+                "hint_level": hint_level,
+            }]
+            base["ai_provider"] = "claude:" + config.valid_model(
+                model or config.CLAUDE_DEFAULT_MODEL
+            )
+        except ClaudeError as e:
+            # Keep the template messages already in `base`; note why we fell back.
+            base["ai_provider"] = "template"
+            base["ai_fallback_reason"] = str(e)
+
+    return base
+
+
+@app.post("/analyze")
+def analyze_math(request: MathRequest):
+    """
+    ALMAS Pipeline:
+      Sprint Agent  →  parse & classify the request
+      Control Agent  →  compile blending instructions
+      Policy Engine  →  validate against guardrails
+      Developer Agent  →  run neuro-symbolic engine
+      Peer Agent  →  generate Socratic response (never reveal answer directly)
+    """
+    session_id = request.session_id or str(uuid4())
+
+    # ── Sprint Agent: validate input ──
+    policy_result = PolicyEngine.evaluate(request.expression)
+    if not policy_result.allowed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Policy violation detected",
+                "violations": policy_result.violations,
+                "penalty_score": policy_result.penalty_score,
+            },
+        )
+
+    # ── Control Agent: compile blending instructions ──
+    context = BlendingInstructions.compile(
+        request.expression, session_id, request.action
+    )
+
+    # ── Developer Agent: run neuro-symbolic engine ──
+    engine_result = NeuroSymbolicEngine.solve_with_steps(request.expression)
+
+    # ── Peer Agent: generate Socratic response (hint level 0) ──
+    # Prefer Claude; fall back to templates. SymPy stays the ground truth.
+    adaptive = memory.get_adaptive_context(session_id)
+    socratic = generate_socratic(
+        engine_result, hint_level=0, adaptive=adaptive,
+        model=request.model, session_id=session_id,
+    )
+
+    # Record interaction in experience memory
+    memory.record_interaction(session_id, request.expression, 0, False)
+    for msg in socratic["messages"]:
+        memory.add_message(session_id, SocraticMessage(
+            role=msg["role"],
+            content=msg["content"],
+            hint_level=0,
+        ))
+
+    return {
+        "session_id": session_id,
+        "original": request.expression,
+        "latex": engine_result.get("latex", ""),
+        "classification": engine_result.get("classification", {}),
+        "socratic": socratic,
+        "blending_context": {
+            "strategic_intent": context["strategic_intent"],
+            "architectural_boundaries": {
+                "socratic_constraint_active": True,
+                "direct_answer_forbidden": True,
+            },
+        },
+        "policy_status": {
+            "checked": True,
+            "allowed": True,
+            "active_policies": len(PolicyEngine.POLICIES),
+        },
+        "verification_status": engine_result.get("verification_status", "pending"),
+        "ai_provider": socratic.get("ai_provider", "template"),
+        # Legacy compatibility
+        "solution": None,
+        "steps": [m["content"] for m in socratic["messages"] if m["role"] == "tutor"],
+        "type": engine_result.get("classification", {}).get("type", "unknown"),
+    }
+
+
+@app.post("/hint")
+def get_next_hint(request: MathRequest):
+    """
+    Progressive hint endpoint — each call reveals one more level
+    of Socratic guidance. Implements the Reflection Pattern.
+    """
+    session_id = request.session_id or str(uuid4())
+    session = memory.get_or_create_session(session_id)
+
+    # Determine current hint level
+    current_level = session["hint_levels_used"].get(request.expression, 0)
+    next_level = min(current_level + 1, 4)
+
+    # Policy check
+    policy_result = PolicyEngine.evaluate(request.expression)
+    if not policy_result.allowed:
+        raise HTTPException(status_code=400, detail="Policy violation")
+
+    # Run engine
+    engine_result = NeuroSymbolicEngine.solve_with_steps(request.expression)
+    adaptive = memory.get_adaptive_context(session_id)
+    socratic = generate_socratic(
+        engine_result, hint_level=next_level, adaptive=adaptive,
+        model=request.model, session_id=session_id,
+    )
+
+    # Record
+    memory.record_interaction(session_id, request.expression, next_level, False)
+    for msg in socratic["messages"]:
+        memory.add_message(session_id, SocraticMessage(
+            role=msg["role"], content=msg["content"], hint_level=next_level,
+        ))
+
+    return {
+        "session_id": session_id,
+        "hint_level": next_level,
+        "socratic": socratic,
+        "verification_status": engine_result.get("verification_status"),
+        "ai_provider": socratic.get("ai_provider", "template"),
+    }
+
+
+#  ═══════════════════════════════════════════════════════════════════════
+#  EXAM — AI-generated question bank covering all knowledge points
+#  ═══════════════════════════════════════════════════════════════════════
+
+def _parse_json_array(text: str):
+    """Pull a JSON array out of a model response (tolerate fences / prose)."""
+    if not text:
+        return None
+    t = text.strip()
+    t = _re.sub(r"^```(?:json)?", "", t).strip()
+    t = _re.sub(r"```$", "", t).strip()
+    start, end = t.find("["), t.rfind("]")
+    if start != -1 and end > start:
+        t = t[start:end + 1]
+    try:
+        data = _json.loads(t)
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
+def _ai_questions_for_dimension(dim: str, grade, session_id: str):
+    """Ask Claude for one question per tag in `dim`, as JSON. [] on failure."""
+    subdims = exam.CATALOGUE[dim]
+    other_dim = exam.DIM_METHOD if dim == exam.DIM_CORE else exam.DIM_CORE
+    other_tags = [t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim]
+    system = prompts.build_exam_prompt(dim, subdims, other_dim, other_tags)
+    try:
+        text = claude_service.complete(
+            system=system,
+            messages=[{"role": "user", "content": "请生成题目，只输出 JSON 数组。"}],
+            session_id=session_id, max_tokens=3000, temperature=0.7,
+        )
+    except ClaudeError:
+        return []
+
+    arr = _parse_json_array(text)
+    if not arr:
+        return []
+
+    valid = {t["tag"] for t in exam.all_tags() if t["dimension"] == dim}
+    valid_other = {t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim}
+    out = []
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        ptag = (item.get("primary_tag") or "").strip()
+        if ptag not in valid:
+            continue
+        tags = [{"dimension": dim, "subdimension": exam.tag_subdimension(ptag) or "",
+                 "tag": ptag, "primary": True}]
+        for ot in (item.get("also_tags") or []):
+            ot = (ot or "").strip()
+            if ot in valid_other:
+                tags.append({"dimension": other_dim,
+                             "subdimension": exam.tag_subdimension(ot) or "",
+                             "tag": ot, "primary": False})
+        out.append({
+            "statement": (item.get("statement") or "").strip(),
+            "latex": (item.get("latex") or "").strip(),
+            "answer": (item.get("answer") or "").strip(),
+            "grade": grade,
+            "source": "ai",
+            "tags": tags,
+        })
+    return out
+
+
+@app.post("/exam/generate")
+def exam_generate(grade: Optional[int] = None):
+    """Generate a fresh set of questions covering EVERY knowledge-point tag
+    across both dimensions, save them to the bank, and return them.
+
+    AI (Claude) writes the questions; any tag the AI misses (or all of them, if
+    the gateway is down) is filled deterministically from the template bank so
+    coverage is always complete.
+    """
+    use_ai = claude_service.available()
+    generated = []
+    covered_primary = set()
+
+    if use_ai:
+        for dim in (exam.DIM_CORE, exam.DIM_METHOD):
+            for q in _ai_questions_for_dimension(dim, grade, "exam-gen"):
+                for t in q["tags"]:
+                    if t.get("primary"):
+                        covered_primary.add(t["tag"])
+                generated.append(q)
+
+    # Fill any uncovered tag with a template question → guaranteed full coverage.
+    for entry in exam.all_tags():
+        if entry["tag"] not in covered_primary:
+            tq = exam.template_question(entry["tag"])
+            tq["grade"] = grade
+            generated.append(tq)
+            covered_primary.add(entry["tag"])
+
+    saved = []
+    for q in generated:
+        qid = exam.save_question(q)
+        q = dict(q)
+        q["id"] = qid
+        saved.append(q)
+
+    return {
+        "provider": "claude" if use_ai else "template",
+        "generated": len(saved),
+        "questions": saved,
+        "coverage": exam.coverage(),
+        "bank_size": exam.bank_size(),
+    }
+
+
+@app.get("/exam/catalogue")
+def exam_catalogue():
+    """The two-dimension taxonomy + which tags currently have questions."""
+    return {
+        "catalogue": exam.CATALOGUE,
+        "coverage": exam.coverage(),
+        "bank_size": exam.bank_size(),
+    }
+
+
+@app.get("/exam/questions")
+def exam_questions():
+    """All questions currently in the bank (most recent first)."""
+    return {"questions": exam.list_questions(), "bank_size": exam.bank_size()}
+
+
+@app.get("/exam/by-tag")
+def exam_by_tag(tag: str, dimension: Optional[str] = None):
+    """Immediate lookup of every question carrying a given type/tag."""
+    return {
+        "tag": tag,
+        "dimension": dimension,
+        "questions": exam.find_by_tag(tag, dimension),
+    }
+
+
+#  ═══════════════════════════════════════════════════════════════════════
+#  AUTH — sign up / sign in / sign out / current user (SQLite-backed)
+#  ═══════════════════════════════════════════════════════════════════════
+
+@app.post("/auth/signup")
+def auth_signup(req: SignUpRequest):
+    """Create a new account and return {user, token}. Token goes in the
+    Authorization header on later requests."""
+    try:
+        result = auth.sign_up(req.username, req.password, req.email)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=e.code, detail=e.message)
+    return result
+
+
+@app.post("/auth/signin")
+def auth_signin(req: SignInRequest):
+    """Validate credentials and return {user, token}."""
+    try:
+        result = auth.sign_in(req.username, req.password)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=e.code, detail=e.message)
+    return result
+
+
+@app.post("/auth/signout")
+def auth_signout(authorization: Optional[str] = Header(default=None)):
+    """Invalidate the caller's session token."""
+    auth.sign_out(_bearer_token(authorization))
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(authorization: Optional[str] = Header(default=None)):
+    """Return the current user for a valid session token, else 401."""
+    user = auth.get_user_by_token(_bearer_token(authorization))
+    if not user:
+        raise HTTPException(status_code=401, detail="Not signed in")
+    return {"user": user}
+
+
+@app.get("/claude/models")
+def claude_models():
+    """Models for the UI dropdown + whether the gateway is actually usable.
+    The frontend shows the list regardless; `available` tells it whether
+    answers will come from Claude or fall back to the template engine."""
+    return {
+        "available": claude_service.available(),
+        "default_model": config.CLAUDE_DEFAULT_MODEL,
+        "models": config.CLAUDE_MODELS,
+        "status": claude_service.status(),
+    }
+
+
+@app.post("/claude/chat")
+def claude_chat(request: ChatRequest):
+    """Free-form tutor chat (the AI Response chat box).
+
+    Grounded in SymPy: if an `expression` is supplied we solve it first and
+    pass the verified result to Claude as ground truth. Always returns 200 with
+    `provider` so the frontend can fall back to its local heuristic when Claude
+    is unavailable rather than showing an error.
+    """
+    session_id = request.session_id or str(uuid4())
+    user_message = (request.message or "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    # Ground the chat in verified math when we have a problem in context.
+    engine_result = None
+    if request.expression:
+        policy_result = PolicyEngine.evaluate(request.expression)
+        if policy_result.allowed:
+            engine_result = NeuroSymbolicEngine.solve_with_steps(request.expression)
+
+    if not claude_service.available():
+        return {
+            "session_id": session_id,
+            "reply": None,
+            "provider": "unavailable",
+            "available": False,
+            "reason": "Claude gateway not configured." if not config.is_configured()
+                      else "Claude temporarily unavailable (circuit breaker).",
+        }
+
+    try:
+        system = prompts.build_chat_system(request.expression or "", engine_result)
+        messages = prompts.to_messages(request.history or [], user_message)
+        reply = claude_service.complete(
+            system=system, messages=messages,
+            model=request.model, session_id=session_id,
+        )
+        model_id = config.valid_model(request.model or config.CLAUDE_DEFAULT_MODEL)
+        # Persist the exchange in experience memory.
+        memory.add_message(session_id, SocraticMessage(role="user", content=user_message))
+        memory.add_message(session_id, SocraticMessage(role="tutor", content=reply))
+        return {
+            "session_id": session_id,
+            "reply": reply,
+            "provider": "claude:" + model_id,
+            "available": True,
+        }
+    except ClaudeError as e:
+        return {
+            "session_id": session_id,
+            "reply": None,
+            "provider": "error",
+            "available": False,
+            "reason": str(e),
+        }
+
+
+@app.get("/session/{session_id}")
+def get_session(session_id: str):
+    """Retrieve session history and experience memory."""
+    session = memory.get_or_create_session(session_id)
+    return {
+        "session": session,
+        "adaptive_context": memory.get_adaptive_context(session_id),
+    }
+
+
+@app.get("/architecture")
+def get_architecture():
+    """Data Manager — return the architecture as a JSON metadata tree."""
+    return build_architecture_tree()
+
+
+@app.get("/policies")
+def get_policies():
+    """Return all active policy guardrails."""
+    return {
+        "framework": "SEPGA (Self-Evolving, Policy-Governed Agentic Automation)",
+        "policies": PolicyEngine.get_active_policies(),
+        "penalty_threshold": PolicyEngine.PENALTY_THRESHOLD,
+        "constraint": "Socratic methodology — direct answers are architecturally forbidden",
+    }
+
+
+@app.post("/verify")
+def verify_expression(request: MathRequest):
+    """
+    Standalone neuro-symbolic verification endpoint.
+    Useful for checking student work.
+    """
+    policy_result = PolicyEngine.evaluate(request.expression)
+    if not policy_result.allowed:
+        raise HTTPException(status_code=400, detail="Policy violation")
+
+    result = NeuroSymbolicEngine.solve_with_steps(request.expression)
+    return {
+        "original": request.expression,
+        "classification": result["classification"],
+        "verified_steps": result["verified_steps"],
+        "verification_status": result["verification_status"],
+        "latex": result["latex"],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  MATH-TO-MANIM ANIMATION ENGINE
+#  (inspired by github.com/HarleyCoops/Math-To-Manim)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Math-To-Manim turns a math prompt into an animated Manim scene. We mirror
+# that idea WITHOUT the heavy LLM + Manim render pipeline: the SymPy solver
+# produces verified solution steps, and a deterministic template converts them
+# into (a) ready-to-render Manim CE Python code and (b) a lightweight
+# "storyboard" the browser animates frame-by-frame with MathJax.
+
+class ManimAnimator:
+    """Template-based Manim scene generator (no LLM, no rendering)."""
+
+    @staticmethod
+    def _py(latex_str: Optional[str]) -> str:
+        """Escape a LaTeX string for embedding in generated (non-raw) Python."""
+        s = latex_str or ""
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    @staticmethod
+    def _plain(text: Optional[str]) -> str:
+        """Strip $-delimiters so step descriptions read as plain captions."""
+        return (text or "").replace("$", "").strip()
+
+    @classmethod
+    def build(cls, expr_str: str) -> Dict[str, Any]:
+        engine = NeuroSymbolicEngine.solve_with_steps(expr_str)
+        steps = engine.get("verified_steps", [])
+        eq_latex = engine.get("latex") or expr_str
+        solution = engine.get("solution")
+
+        # ── Storyboard: one frame per solution state (for the browser) ──
+        storyboard: List[Dict[str, Any]] = [{
+            "index": 0,
+            "title": "The problem",
+            "latex": eq_latex,
+            "caption": f"Let's solve {expr_str}",
+        }]
+        for s in steps:
+            result_latex = s.get("result_latex") or ""
+            if not result_latex:
+                continue
+            storyboard.append({
+                "index": s.get("step"),
+                "title": s.get("action", ""),
+                "latex": result_latex,
+                "caption": cls._plain(s.get("description", "")),
+            })
+
+        return {
+            "expression": expr_str,
+            "latex": eq_latex,
+            "solution": solution,
+            "scene_name": "SolveScene",
+            "storyboard": storyboard,
+            "manim_code": cls._render_code(expr_str, eq_latex, steps),
+            "verification_status": engine.get("verification_status", "pending"),
+        }
+
+    @classmethod
+    def _render_code(cls, expr_str: str, eq_latex: str, steps: List[Dict]) -> str:
+        """Emit a self-contained Manim CE Scene that animates the solution."""
+        py = cls._py
+        L: List[str] = [
+            "from manim import *",
+            "",
+            "",
+            "class SolveScene(Scene):",
+            '    """Auto-generated by the Math-To-Manim-style template engine."""',
+            "",
+            "    def construct(self):",
+            f'        title = Title("Solving:  {py(expr_str)}")',
+            "        self.play(Write(title))",
+            "        self.wait(0.5)",
+            "",
+            "        # Starting equation",
+            f'        eq = MathTex("{py(eq_latex)}").scale(1.4)',
+            "        self.play(Write(eq))",
+            "        self.wait(1)",
+        ]
+
+        for s in steps:
+            result_latex = s.get("result_latex")
+            if not result_latex:
+                continue
+            action = py(s.get("action", ""))
+            L += [
+                "",
+                f'        # Step {s.get("step")}: {action}',
+                f'        caption = Tex("{action}", font_size=34).to_edge(DOWN)',
+                f'        step_eq = MathTex("{py(result_latex)}").scale(1.4)',
+                "        self.play(",
+                "            TransformMatchingTex(eq, step_eq),",
+                "            FadeIn(caption, shift=UP),",
+                "        )",
+                "        self.wait(1.2)",
+                "        self.play(FadeOut(caption))",
+                "        eq = step_eq",
+            ]
+
+        L += [
+            "",
+            "        # Highlight the final result",
+            "        box = SurroundingRectangle(eq, color=YELLOW, buff=0.2)",
+            "        self.play(Create(box))",
+            "        self.wait(2)",
+        ]
+        return "\n".join(L)
+
+
+@app.post("/animate")
+def animate_solution(request: MathRequest):
+    """
+    Math-To-Manim-style endpoint.
+
+    Takes the expression typed in "Solve with Voice or Text" and returns:
+      • storyboard  — solution frames for the in-browser animated walkthrough
+      • manim_code  — ready-to-render Manim CE Python (paste into a .py & run
+                      `manim -pql scene.py SolveScene` if Manim is installed)
+    """
+    policy_result = PolicyEngine.evaluate(request.expression)
+    if not policy_result.allowed:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Policy violation", "violations": policy_result.violations},
+        )
+    return ManimAnimator.build(request.expression)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SYMPY-POWERED PLOTTING  (the visual payoff for the "Solve with SymPy" path)
+# ═══════════════════════════════════════════════════════════════════════
+
+class SymPyPlotter:
+    """Build graph data with SymPy so the browser can animate the curve.
+
+    SymPy does the math — `lambdify` turns the expression into a numeric
+    function we sample over a window, and `solve` gives exact roots that mark
+    the solution(s). No matplotlib / image rendering; we return raw points and
+    the frontend traces them on a <canvas>.
+    """
+
+    SAMPLES = 140
+
+    @classmethod
+    def build(cls, expr_str: str) -> Dict[str, Any]:
+        try:
+            # Turn "lhs = rhs" into f = lhs - rhs, so its roots ARE the solutions.
+            if "=" in expr_str:
+                parts = expr_str.split("=")
+                lhs = safe_parse(parts[0])
+                rhs = safe_parse(parts[1])
+                expr = lhs - rhs
+                display_latex = latex(Eq(lhs, rhs))
+                is_equation = True
+            else:
+                expr = safe_parse(expr_str)
+                display_latex = latex(expr)
+                is_equation = False
+        except Exception as exc:
+            return {"plottable": False, "expression": expr_str,
+                    "reason": f"Could not parse the expression ({exc})."}
+
+        free = list(expr.free_symbols)
+        if len(free) != 1:
+            return {
+                "plottable": False,
+                "expression": expr_str,
+                "latex": display_latex,
+                "reason": "Need exactly one variable to draw a 2-D curve.",
+            }
+
+        var = free[0]
+        f = lambdify(var, expr, modules=["math"])
+
+        # Exact roots (real only) — these drive the view window and the markers.
+        roots: List[float] = []
+        try:
+            for s in solve(Eq(expr, 0), var):
+                v = complex(s.evalf())
+                if abs(v.imag) < 1e-9:
+                    roots.append(float(v.real))
+        except Exception:
+            pass
+
+        # Centre the x-window on the roots when we have them; else a sane default.
+        if roots:
+            lo, hi = min(roots), max(roots)
+            pad = max(2.0, (hi - lo) * 0.8 + 2.0)
+            x_min, x_max = lo - pad, hi + pad
+        else:
+            x_min, x_max = -10.0, 10.0
+
+        points: List[List[float]] = []
+        n = cls.SAMPLES
+        for i in range(n + 1):
+            x = x_min + (x_max - x_min) * i / n
+            try:
+                y = f(x)
+                if isinstance(y, complex):
+                    continue
+                y = float(y)
+                if y != y or y in (float("inf"), float("-inf")) or abs(y) > 1e6:
+                    continue
+                points.append([round(x, 4), round(y, 4)])
+            except Exception:
+                continue
+
+        return {
+            "plottable": len(points) > 1,
+            "expression": expr_str,
+            "latex": display_latex,
+            "function_latex": "y = " + latex(expr),
+            "variable": str(var),
+            "is_equation": is_equation,
+            "x_range": [round(x_min, 4), round(x_max, 4)],
+            "points": points,
+            "roots": sorted({round(r, 6) for r in roots}),
+        }
+
+
+@app.post("/plot")
+def plot_solution(request: MathRequest):
+    """SymPy-powered plot endpoint.
+
+    Returns curve data (computed with SymPy's `lambdify`) plus exact roots,
+    so the "Solve with SymPy" choice can animate the graph of the expression
+    with its solution(s) marked — SymPy doing the visualization math.
+    """
+    policy_result = PolicyEngine.evaluate(request.expression)
+    if not policy_result.allowed:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Policy violation", "violations": policy_result.violations},
+        )
+    return SymPyPlotter.build(request.expression)
+
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

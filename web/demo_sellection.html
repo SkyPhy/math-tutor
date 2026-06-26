@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Build your session · AI Math Tutor</title>
+    <meta name="description" content="Pick your grade and the knowledge points you want to practise, then launch the tutor.">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --accent-blue: #38bdf8;
+            --accent-purple: #818cf8;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f1f5f9;
+            --text-dim: #94a3b8;
+        }
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top left, #1e293b, var(--bg-deep));
+            color: var(--text-main);
+            margin: 0;
+            min-height: 100vh;
+            padding: 0 20px 60px;
+        }
+
+        nav {
+            display: flex; align-items: center; justify-content: space-between;
+            max-width: 1000px; margin: 0 auto; padding: 24px 4px;
+        }
+        .brand { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 1.1rem; }
+        .brand .logo {
+            width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); font-size: 1.15rem;
+        }
+        nav a { color: var(--text-dim); text-decoration: none; font-size: 0.95rem; transition: color 0.15s; }
+        nav a:hover { color: var(--text-main); }
+
+        header.hd { max-width: 1000px; margin: 20px auto 10px; text-align: center; }
+        header.hd h1 {
+            font-weight: 700; font-size: clamp(2rem, 5vw, 3rem); margin: 0 0 14px; letter-spacing: -0.02em;
+        }
+        header.hd h1 .grad {
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        header.hd p { color: var(--text-dim); font-weight: 300; font-size: 1.1rem; margin: 0 auto; max-width: 560px; }
+
+        main { max-width: 1000px; margin: 0 auto; }
+
+        .panel {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 22px;
+            padding: 30px;
+            margin-top: 26px;
+        }
+        .panel-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+        .panel-head .step-badge {
+            width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: #0b1020; font-weight: 700; font-size: 0.95rem; flex: none;
+        }
+        .panel-head h2 { font-size: 1.35rem; font-weight: 600; margin: 0; }
+        .panel-head .zh { color: var(--text-dim); font-weight: 300; font-size: 1rem; }
+        .panel-sub { color: var(--text-dim); font-weight: 300; margin: 4px 0 22px 42px; font-size: 0.95rem; }
+
+        /* Grade selector — segmented 1..6 */
+        .grade-row { display: flex; gap: 12px; flex-wrap: wrap; margin-left: 42px; }
+        .grade-btn {
+            min-width: 88px; padding: 16px 10px; border-radius: 14px;
+            background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border);
+            color: var(--text-main); font-family: inherit; cursor: pointer; text-align: center;
+            transition: transform 0.12s, border-color 0.15s, background 0.15s;
+        }
+        .grade-btn:hover { transform: translateY(-2px); border-color: var(--accent-blue); }
+        .grade-btn .num { display: block; font-size: 1.5rem; font-weight: 700; }
+        .grade-btn .lbl { display: block; font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+        .grade-btn.active {
+            background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(129,140,248,0.22));
+            border-color: var(--accent-blue);
+            box-shadow: 0 8px 24px rgba(56,189,248,0.18);
+        }
+        .grade-btn.active .lbl { color: var(--text-main); }
+
+        /* Knowledge-point adder */
+        .adder { display: flex; gap: 12px; margin: 0 0 18px 42px; flex-wrap: wrap; }
+        select.kp-select {
+            flex: 1; min-width: 260px;
+            padding: 12px 14px; border-radius: 12px;
+            background: #16223b; color: var(--text-main);
+            border: 1px solid var(--glass-border); font-family: inherit; font-size: 0.98rem; cursor: pointer;
+        }
+        select.kp-select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(56,189,248,0.18); }
+        select.kp-select optgroup { color: var(--accent-blue); font-weight: 600; }
+        select.kp-select option { color: var(--text-main); background: #16223b; padding: 4px; }
+        .btn-add {
+            padding: 12px 22px; border-radius: 12px; cursor: pointer; font-family: inherit; font-size: 0.98rem; font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); color: #0b1020; border: none;
+            transition: transform 0.12s, box-shadow 0.15s;
+        }
+        .btn-add:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(129,140,248,0.3); }
+
+        /* Selected-points table */
+        .kp-table-wrap { margin-left: 42px; }
+        table.kp-table { width: 100%; border-collapse: collapse; }
+        table.kp-table th, table.kp-table td {
+            text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--glass-border); font-size: 0.95rem;
+        }
+        table.kp-table th { color: var(--text-dim); font-weight: 500; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        table.kp-table td.idx { color: var(--text-dim); width: 44px; }
+        table.kp-table td.dim { color: var(--accent-blue); white-space: nowrap; }
+        .btn-remove {
+            background: rgba(239,68,68,0.12); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25);
+            border-radius: 8px; padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 0.85rem;
+            transition: background 0.15s;
+        }
+        .btn-remove:hover { background: rgba(239,68,68,0.25); }
+        .empty-row td { color: var(--text-dim); font-weight: 300; font-style: italic; }
+
+        /* Launch bar */
+        .launch-bar {
+            display: flex; align-items: center; justify-content: space-between; gap: 20px;
+            margin-top: 30px; padding: 24px 30px; flex-wrap: wrap;
+            background: linear-gradient(135deg, rgba(56,189,248,0.12), rgba(129,140,248,0.12));
+            border: 1px solid var(--glass-border); border-radius: 22px;
+        }
+        .summary { color: var(--text-dim); font-weight: 300; font-size: 0.98rem; }
+        .summary b { color: var(--text-main); font-weight: 600; }
+        .btn-launch {
+            display: inline-flex; align-items: center; gap: 10px;
+            padding: 15px 32px; border-radius: 14px; font-family: inherit; font-size: 1.08rem; font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); color: #0b1020;
+            text-decoration: none; border: none; cursor: pointer;
+            box-shadow: 0 10px 30px rgba(56,189,248,0.25); transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+        }
+        .btn-launch:hover { transform: translateY(-3px); box-shadow: 0 16px 40px rgba(129,140,248,0.4); }
+        .btn-launch[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+        .hint { color: #fbbf24; font-size: 0.85rem; margin-top: 8px; min-height: 1em; }
+
+        footer { text-align: center; color: var(--text-dim); font-size: 0.85rem; padding: 40px 20px 0; font-weight: 300; }
+        footer a { color: var(--accent-blue); text-decoration: none; }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <div class="brand"><span class="logo">∑</span><span>AI Math Tutor</span></div>
+        <div><a href="index.html">← Home</a></div>
+    </nav>
+
+    <header class="hd">
+        <h1>Build your <span class="grad">practice session</span></h1>
+        <p>Pick a grade and the knowledge points you want to work on, then launch the tutor.</p>
+    </header>
+
+    <main>
+        <!-- STEP 1 — Grade (年级 1–6) -->
+        <section class="panel">
+            <div class="panel-head">
+                <span class="step-badge">1</span>
+                <h2>Choose your grade</h2>
+                <span class="zh">选择年级 (1–6)</span>
+            </div>
+            <p class="panel-sub">Primary-school grade — this sets the difficulty level of the problems.</p>
+            <div class="grade-row" id="gradeRow">
+                <!-- grade buttons injected by JS -->
+            </div>
+        </section>
+
+        <!-- STEP 2 — Type 1: Core knowledge domains (核心知识领域, dims 1–4) -->
+        <section class="panel">
+            <div class="panel-head">
+                <span class="step-badge">2</span>
+                <h2>Core knowledge domains</h2>
+                <span class="zh">核心知识领域 (数与代数 · 图形与几何 · 量与计量 · 统计与概率)</span>
+            </div>
+            <p class="panel-sub">Add as many concrete topics as you like.</p>
+            <div class="adder">
+                <select class="kp-select" id="coreSelect"></select>
+                <button class="btn-add" onclick="addPoint('core')">+ Add topic</button>
+            </div>
+            <div class="kp-table-wrap">
+                <table class="kp-table">
+                    <thead><tr><th class="idx">#</th><th>Dimension · 维度</th><th>Knowledge point · 知识点</th><th></th></tr></thead>
+                    <tbody id="coreBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- STEP 3 — Type 2: Application & thinking methods (综合与思想方法, dims 5–6) -->
+        <section class="panel">
+            <div class="panel-head">
+                <span class="step-badge">3</span>
+                <h2>Application &amp; thinking methods</h2>
+                <span class="zh">综合与思想方法 (综合与实践 · 数学思想方法)</span>
+            </div>
+            <p class="panel-sub">Optional cross-cutting skills that run through every topic.</p>
+            <div class="adder">
+                <select class="kp-select" id="methodSelect"></select>
+                <button class="btn-add" onclick="addPoint('method')">+ Add skill</button>
+            </div>
+            <div class="kp-table-wrap">
+                <table class="kp-table">
+                    <thead><tr><th class="idx">#</th><th>Dimension · 维度</th><th>Knowledge point · 知识点</th><th></th></tr></thead>
+                    <tbody id="methodBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Launch -->
+        <div class="launch-bar">
+            <div>
+                <div class="summary" id="summary">No grade selected yet.</div>
+                <div class="hint" id="hint"></div>
+            </div>
+            <a class="btn-launch" id="launchBtn" aria-disabled="true" href="#" onclick="return launchDemo(event)">
+                🚀 Launch the Tutor
+            </a>
+        </div>
+    </main>
+
+    <footer>
+        Knowledge points follow the 义务教育数学课程标准 six dimensions · see <a href="../lesson/README.md">lesson/README.md</a>.
+    </footer>
+
+    <script>
+        // ── Knowledge-point catalogue (from lesson/README.md) ──────────────
+        // Type 1 — 核心知识领域: the four concrete content dimensions (1–4).
+        const CORE = {
+            '数与代数 Numbers & Algebra': ['数的认识', '数的运算', '数的关系', '初步代数思想'],
+            '图形与几何 Shapes & Geometry': ['平面图形', '立体图形', '图形的变换', '位置与方向'],
+            '量与计量 Quantity & Measurement': ['长度', '面积、体积、容积', '质量', '时间', '货币'],
+            '统计与概率 Statistics & Probability': ['数据收集与整理', '统计图', '平均数、中位数、众数', '可能性'],
+        };
+        // Type 2 — 综合与思想方法: the two cross-cutting dimensions (5–6).
+        const METHODS = {
+            '综合与实践 Application & Practice': ['跨学科应用', '数学活动、项目式学习', '建模意识与应用能力'],
+            '数学思想方法 Thinking Methods': ['数感、符号意识、空间观念', '推理能力（归纳、演绎）', '模型思想', '数据分析观念', '应用意识与创新意识'],
+        };
+
+        // Selection state.
+        let grade = null;
+        const selected = { core: [], method: [] };   // each item: {dim, point}
+
+        // ── Build the grade buttons (1–6) ──
+        const gradeRow = document.getElementById('gradeRow');
+        for (let g = 1; g <= 6; g++) {
+            const b = document.createElement('button');
+            b.className = 'grade-btn';
+            b.innerHTML = `<span class="num">${g}</span><span class="lbl">Grade · ${g}年级</span>`;
+            b.onclick = () => {
+                grade = g;
+                document.querySelectorAll('.grade-btn').forEach(x => x.classList.remove('active'));
+                b.classList.add('active');
+                refresh();
+            };
+            gradeRow.appendChild(b);
+        }
+
+        // ── Populate a grouped dropdown from a catalogue ──
+        function fillSelect(id, catalogue) {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '';
+            for (const [dim, points] of Object.entries(catalogue)) {
+                const og = document.createElement('optgroup');
+                og.label = dim;
+                points.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = dim + '||' + p;
+                    opt.textContent = p;
+                    og.appendChild(opt);
+                });
+                sel.appendChild(og);
+            }
+        }
+        fillSelect('coreSelect', CORE);
+        fillSelect('methodSelect', METHODS);
+
+        // ── Add the currently-selected dropdown option to its table ──
+        function addPoint(kind) {
+            const sel = document.getElementById(kind === 'core' ? 'coreSelect' : 'methodSelect');
+            if (!sel.value) return;
+            const [dim, point] = sel.value.split('||');
+            // Skip duplicates.
+            if (selected[kind].some(it => it.dim === dim && it.point === point)) {
+                flash('Already added — pick a different one.');
+                return;
+            }
+            selected[kind].push({ dim, point });
+            renderTable(kind);
+            refresh();
+        }
+
+        function removePoint(kind, i) {
+            selected[kind].splice(i, 1);
+            renderTable(kind);
+            refresh();
+        }
+
+        // ── Render one selection table ──
+        function renderTable(kind) {
+            const body = document.getElementById(kind === 'core' ? 'coreBody' : 'methodBody');
+            const rows = selected[kind];
+            body.innerHTML = '';
+            if (!rows.length) {
+                body.innerHTML = `<tr class="empty-row"><td colspan="4">Nothing added yet — use the dropdown above.</td></tr>`;
+                return;
+            }
+            rows.forEach((it, i) => {
+                const tr = document.createElement('tr');
+                // Show only the Chinese dimension name in the table for brevity.
+                const dimZh = it.dim.split(' ')[0];
+                tr.innerHTML =
+                    `<td class="idx">${i + 1}</td>` +
+                    `<td class="dim">${dimZh}</td>` +
+                    `<td>${it.point}</td>` +
+                    `<td><button class="btn-remove" onclick="removePoint('${kind}', ${i})">Remove</button></td>`;
+                body.appendChild(tr);
+            });
+        }
+
+        // ── Live summary + launch enablement ──
+        function refresh() {
+            const total = selected.core.length + selected.method.length;
+            const sum = document.getElementById('summary');
+            const btn = document.getElementById('launchBtn');
+            if (grade == null) {
+                sum.innerHTML = 'No grade selected yet.';
+            } else {
+                sum.innerHTML = `Grade <b>${grade}</b> · <b>${selected.core.length}</b> core ` +
+                    `${selected.core.length === 1 ? 'topic' : 'topics'} · <b>${selected.method.length}</b> ` +
+                    `method ${selected.method.length === 1 ? 'skill' : 'skills'}`;
+            }
+            // Require a grade; knowledge points are optional but encouraged.
+            btn.setAttribute('aria-disabled', grade == null ? 'true' : 'false');
+        }
+
+        function flash(msg) {
+            const h = document.getElementById('hint');
+            h.textContent = msg;
+            clearTimeout(flash._t);
+            flash._t = setTimeout(() => { h.textContent = ''; }, 2200);
+        }
+
+        // ── Launch the demo, carrying the selections as query params ──
+        function launchDemo(e) {
+            e.preventDefault();
+            if (grade == null) { flash('Please choose a grade first.'); return false; }
+            const params = new URLSearchParams();
+            params.set('grade', grade);
+            if (selected.core.length)
+                params.set('core', selected.core.map(it => it.point).join(','));
+            if (selected.method.length)
+                params.set('methods', selected.method.map(it => it.point).join(','));
+            window.location.href = 'demo_standalone.html?' + params.toString();
+            return false;
+        }
+
+        // Initial render.
+        renderTable('core');
+        renderTable('method');
+        refresh();
+    </script>
+</body>
+
+</html>
