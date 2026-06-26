@@ -43,7 +43,7 @@ Math Solver"）。本计划做三件事：
 | 9 | ALMAS 多智能体（Sprint/Supervisor/Summary/Control/Developer/Peer）| 六个 Agent 仅作为 `/architecture` 元数据 + 注释存在 | main.py `build_architecture_tree`、各处注释 | 🟠 仅描述（无真实编排）|
 | 10 | 工作流拓扑（Router/Pipeline/Reflection/Parallelization）| `/analyze` 为线性硬编码流水线 | `analyze_math` | 🟠 仅描述 |
 | 11 | 神经-符号集成（SymPy CAS 验证）| 方程求解、化简、验证、分类、步骤生成 | `NeuroSymbolicEngine.solve_with_steps` | ✅ 已实现（项目最强项）|
-| 12 | 递归智能 / 经验记忆 | 会话内经验记忆、自适应难度 | `ExperienceMemory` | 🟡 部分（进程内、非持久跨会话、无技能固化）|
+| 12 | 递归智能 / 经验记忆 | 持久经验记忆、自适应难度（SQLite，跨重启留存）| `backend/app/memory.py::PersistentExperienceMemory`、`data/memory.db` | ✅ 已实现（2026-06-26；技能固化仍可深化）|
 | 13 | SEPGA 策略治理 | 输入策略校验 + 罚分 | `PolicyEngine.evaluate` | 🟡 部分（作用于用户输入，未作用于"代码生成计划"）|
 | 14 | 教学护栏（Socratic 约束）| 5 级提示、绝不直接给答案、Claude 系统提示强制 | `SocraticEngine`、`backend/prompts.py` | ✅ 已实现（强）|
 | 15 | Lattice（护栏自演化 / 对抗）| —— | —— | ❌ 缺失 |
@@ -114,15 +114,20 @@ Math Solver"）。本计划做三件事：
   - `README.md` 更新为现状（`web/` 入口、`.env` 配置、nex OCR、Claude、auth、exam）。
 - **验收**：冷启动后 `web/index.html` → 各页可达；后端 `/docs` 200；关键接口烟测通过。
 
-### 阶段 1 · 持久化经验记忆（Recursive Intelligence）（1–2 周）
+### 阶段 1 · 持久化经验记忆（Recursive Intelligence）（✅ 已完成 2026-06-26）
 - **蓝图**：§"Recursive Intelligence and Experience-Based Memory"。
 - **目标**：把 `ExperienceMemory` 落到 SQLite，跨会话/重启留存；沉淀"可复用技能"。
-- **交付物**：
-  - `backend/memory.py`：表 `interactions`、`skills`（成功策略固化）、`struggles`；
-    复用 `data/` 目录与 `auth.py`/`exam.py` 的 sqlite 模式。
-  - `main.py` 接入：`/analyze`、`/hint` 读写持久记忆；新增 `GET /memory/{session}`。
-  - 自适应难度从持久统计计算（替换进程内字典）。
-- **验收**：连续两次会话，第二次的提示策略随历史变化；重启后记忆仍在（curl 观测）。
+- **交付物（已落地）**：
+  - ✅ `backend/app/memory.py::PersistentExperienceMemory`：表 `mem_sessions`、
+    `mem_messages`、`mem_interactions`（按 `session_id` 建索引），复用 `data/` 目录与
+    `auth.py`/`exam.py` 的 sqlite 模式。`get_or_create_session` 从这些表重建会话字典，
+    `successful_strategies` / `struggle_patterns` / `hint_levels_used` 由交互记录派生。
+  - ✅ `main.py` 接入：方法签名与原进程内版本一致，`/analyze`、`/hint`、`/claude/chat`、
+    `GET /session/{id}` 调用点未改即获得持久化；启动时 `memory_store.init_db()` 建表。
+  - ✅ 自适应难度从持久统计计算（替换进程内字典）。
+- **验收（已通过，运行观测）**：`/hint` 连续调用提示等级 [1,2,3] 递增；**重启后**
+  `/session/{id}` 仍含会话历史与等级，且下一次 `/hint` 续接到 4（非重置为 1）。
+- **后续可深化**：`skills` 技能固化表、`GET /memory/{session}` 聚合视图（非阻塞，留待需要时）。
 
 ### 阶段 2 · Data Manager：自动架构 JSON 树（1–2 周）
 - **蓝图**：§"Foundational Architecture / Data Manager"。
@@ -196,7 +201,7 @@ Math Solver"）。本计划做三件事：
 | 里程碑 | 对应阶段 | 关键验收指标 |
 |--------|---------|-------------|
 | M0 可靠基线 | 0 | 冷启动全链路烟测通过；polyfill 卡死消除 |
-| M1 记忆持久 | 1 | 重启后经验记忆留存；自适应随历史变化 |
+| M1 记忆持久 ✅ | 1 | 重启后经验记忆留存；自适应随历史变化（2026-06-26 达成）|
 | M2 架构自省 | 2 | `/architecture` 由真实代码自动生成 |
 | M3 多智能体产出 | 3 | ALMAS 编排生成讲解/练习，Voting+Peer 可观测 |
 | M4 计划级治理 | 4 | 违规计划被 SEPGA 拒绝并审计 |
@@ -218,7 +223,7 @@ Math Solver"）。本计划做三件事：
 | Blending Instructions | `backend/main.py::BlendingInstructions`（现有，待扩展架构边界）|
 | 复合 AI 网关 | `backend/claude_service.py`、`config.py`（现有）|
 | 多模态前端 | `web/*.html`、`backend/recognize.py`（现有）|
-| 经验记忆 | `ExperienceMemory`（现有）→ `backend/memory.py`（新增，阶段1）|
+| 经验记忆 | `backend/app/memory.py::PersistentExperienceMemory`（阶段1 已完成，SQLite 持久化）|
 | Data Manager | `/architecture`（现有静态）→ `backend/data_manager.py`（新增，阶段2）|
 | ALMAS 编排 | `backend/orchestrator.py`（新增，阶段3）|
 | SEPGA 治理 | `PolicyEngine`（现有输入级）→ `backend/policy.py`（新增计划级，阶段4）|

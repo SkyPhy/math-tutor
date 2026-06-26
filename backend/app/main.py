@@ -60,6 +60,12 @@ from . import auth
 # Exam question bank — AI-generated questions tagged across two dimensions,
 # stored in SQLite with tag-indexed lookup (exam.py / exams.db).
 from . import exam
+
+# Durable experience memory — persisted to SQLite (memory.py / memory.db) so the
+# tutor's adaptive context survives restarts and is shared across sessions.
+from . import memory as memory_store
+from .memory import memory
+
 import json as _json
 import re as _re
 
@@ -100,6 +106,9 @@ def _warmup_ocr() -> None:
     # Exam question bank tables.
     exam.init_db()
     print(f"[startup] Exam bank ready ({exam.bank_size()} questions).")
+    # Durable experience-memory tables (persists adaptive context across restarts).
+    memory_store.init_db()
+    print("[startup] Experience memory DB ready.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -188,83 +197,11 @@ ArchitectureNode.model_rebuild()
 #  EXPERIENCE MEMORY — Persistent session learning
 # ═══════════════════════════════════════════════════════════════════════
 
-class ExperienceMemory:
-    """
-    Implements durable repository memory per the document's specification.
-    Tracks which approaches worked, which patterns the user struggles with,
-    and adapts hint strategies accordingly.
-    """
-    def __init__(self):
-        self.sessions: Dict[str, Dict] = {}
-
-    def get_or_create_session(self, session_id: str) -> Dict:
-        if session_id not in self.sessions:
-            self.sessions[session_id] = {
-                "id": session_id,
-                "created_at": datetime.now().isoformat(),
-                "conversation": [],
-                "expressions_solved": [],
-                "hint_levels_used": {},     # expr -> max hint level reached
-                "struggle_patterns": [],     # patterns the user found difficult
-                "successful_strategies": [], # hints that led to user understanding
-                "total_interactions": 0,
-                "socratic_compliance": 1.0,  # how well we maintained Socratic method
-            }
-        return self.sessions[session_id]
-
-    def record_interaction(self, session_id: str, expression: str,
-                           hint_level: int, user_solved: bool):
-        session = self.get_or_create_session(session_id)
-        session["total_interactions"] += 1
-        session["hint_levels_used"][expression] = max(
-            session["hint_levels_used"].get(expression, 0), hint_level
-        )
-        if user_solved:
-            session["successful_strategies"].append({
-                "expression": expression,
-                "hints_needed": hint_level,
-                "timestamp": datetime.now().isoformat()
-            })
-        elif hint_level >= 3:
-            session["struggle_patterns"].append({
-                "expression": expression,
-                "timestamp": datetime.now().isoformat()
-            })
-
-    def add_message(self, session_id: str, message: SocraticMessage):
-        session = self.get_or_create_session(session_id)
-        session["conversation"].append({
-            "role": message.role,
-            "content": message.content,
-            "hint_level": message.hint_level,
-            "timestamp": datetime.now().isoformat()
-        })
-
-    def get_conversation(self, session_id: str) -> List[Dict]:
-        session = self.get_or_create_session(session_id)
-        return session["conversation"]
-
-    def get_adaptive_context(self, session_id: str) -> Dict:
-        """Generate blending instruction context from experience memory."""
-        session = self.get_or_create_session(session_id)
-        return {
-            "interaction_count": session["total_interactions"],
-            "struggle_count": len(session["struggle_patterns"]),
-            "success_rate": (
-                len(session["successful_strategies"]) /
-                max(session["total_interactions"], 1)
-            ),
-            "needs_more_guidance": len(session["struggle_patterns"]) > 2,
-            "is_advanced": (
-                len(session["successful_strategies"]) > 5 and
-                session["total_interactions"] > 0 and
-                len(session["struggle_patterns"]) /
-                max(session["total_interactions"], 1) < 0.2
-            ),
-        }
-
-
-memory = ExperienceMemory()
+# ExperienceMemory now lives in memory.py as `PersistentExperienceMemory`,
+# backed by SQLite (memory.db) so adaptive context survives restarts. The
+# singleton `memory` is imported at the top of this file; its method surface
+# (get_or_create_session / record_interaction / add_message / get_conversation
+# / get_adaptive_context) is unchanged, so the call sites below are untouched.
 
 # ═══════════════════════════════════════════════════════════════════════
 #  POLICY ENGINE (SEPGA) — Compliance-by-Design

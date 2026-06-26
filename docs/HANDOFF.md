@@ -70,11 +70,12 @@ math/
     │   ├── recognize.py            ← nex-n2-pro 视觉 OCR（urllib，含图像预处理）
     │   ├── prompts.py              ← Claude 系统提示（Socratic 提示 / 聊天 / 出题 JSON）
     │   ├── auth.py                 ← 账户/会话（SQLite, PBKDF2, 限速）
-    │   └── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
+    │   ├── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
+    │   └── memory.py               ← 持久经验记忆（SQLite, 自适应难度，跨重启留存）
     ├── requirements.txt            ← 依赖（已移除 easyocr/pytesseract）
     ├── .env                        ← 密钥（gitignore；含真实值）
     ├── .env.example                ← 密钥模板
-    └── data/{users.db,exams.db}    ← SQLite 数据（gitignore）
+    └── data/{users.db,exams.db,memory.db}  ← SQLite 数据（gitignore）
 ```
 
 > 注：包内模块改用相对导入（`from . import config` 等）；`.env` 与 `data/` 位于
@@ -116,7 +117,10 @@ math/
 - `NeuroSymbolicEngine` — SymPy 求解/化简/验证/分类/步骤生成（**项目最强、最可靠的部分**）。
 - `SocraticEngine` — 5 级提示模板，绝不直接给答案。
 - `PolicyEngine` — 输入级策略校验 + 罚分（SEPGA 的输入侧）。
-- `ExperienceMemory` — **进程内**会话记忆/自适应难度（⚠️ 重启即失，未持久化）。
+- `ExperienceMemory` → 已迁移为 `backend/app/memory.py::PersistentExperienceMemory`，
+  **SQLite 持久化**（`data/memory.db`），跨会话/重启留存；自适应难度由持久统计计算。
+  方法签名不变（`get_or_create_session`/`record_interaction`/`add_message`/
+  `get_conversation`/`get_adaptive_context`），main.py 调用点未改。
 - `BlendingInstructions` — 把表达式/会话/动作编译成提示上下文。
 - `Problem` / `OpenTDBProvider` — 练习题模型与外部题源。
 - `ManimAnimator` / `SymPyPlotter` — 模板动画 / 绘图数据（非真渲染）。
@@ -125,6 +129,8 @@ math/
 ### 3.4 数据存储（SQLite，`backend/data/`）
 - `users.db`：`users`（PBKDF2 盐哈希）、`sessions`（令牌+过期）。
 - `exams.db`：`questions`、`question_tags`（按 `(dimension, tag)` 建索引，支持即时按类型检索）。
+- `memory.db`：`mem_sessions`、`mem_messages`、`mem_interactions`（持久经验记忆，按
+  `session_id` 建索引）。`get_or_create_session` 从这些表重建会话字典。
 - 当前数据：1 个账户、~150 道题（每次 `/exam/generate` **追加**一套，会累积增长）。
 
 ---
@@ -183,7 +189,9 @@ math/
 - [x] **合并 `frontend/`**：早期 React 原型迁到 `web/legacy/`（仅参考，去掉 `dist/` 构建产物）。
 
 **仍待办：**
-- [ ] **`ExperienceMemory` 持久化**到 SQLite（见 DEVELOPMENT_PLAN 阶段 1）——目前重启即失。
+- [x] **`ExperienceMemory` 持久化**到 SQLite（DEVELOPMENT_PLAN 阶段 1，2026-06-26 完成）——
+      `backend/app/memory.py`（`data/memory.db`，gitignore）。已验证：提示分级 [1,2,3] 递增，
+      重启后会话历史与提示等级留存、续接到 4；接口面与原进程内版本一致。
 - [ ] **轮换密钥**：`.env` 含真实 key（坑 #9），交接后请轮换 `NEX_OCR_API_KEY` 与 `CLAUDE_API_KEY`。
 - [ ] 安全：`/exam/*`、`/analyze` 等均无鉴权（按设计）；如需多用户隔离再用 `require_user`。
 
@@ -208,6 +216,7 @@ math/
 | 提示词（Socratic/聊天/出题） | `backend/app/prompts.py` |
 | 密钥/配置 | `backend/.env`（真实值，gitignore）+ `backend/app/config.py`（唯一读取处）|
 | 账户/登录 | `backend/app/auth.py` + `web/sign{in,up}.html` |
+| 经验记忆/自适应 | `backend/app/memory.py`（`data/memory.db`）+ `/session/{id}` |
 | 出题/题库/标签 | `backend/app/exam.py` + `web/demo_exam.html` + `lesson/README.md` |
 | 核心辅导/白板/考试模式 | `web/demo_standalone.html` |
 | 路线图 | `docs/DEVELOPMENT_PLAN.md` |

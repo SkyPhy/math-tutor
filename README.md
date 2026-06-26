@@ -5,7 +5,8 @@ mathematics. A **FastAPI** backend pairs **SymPy** (deterministic verification) 
 **Claude** (natural-language tutoring) and a **vision OCR** model for handwriting; a
 **static multi-page frontend** provides the whiteboard, chat, and auto-generated exams.
 
-> **New here / taking over the project?** Read [`docs/HANDOFF.md`](docs/HANDOFF.md) for the
+> **New here / taking over the project?** Start with [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md)
+> (how the project was built, step by step), then [`docs/HANDOFF.md`](docs/HANDOFF.md) for the
 > full factual snapshot, and [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) for the roadmap.
 
 ## Core principles
