@@ -11,16 +11,16 @@
 ## 0. TL;DR — 30 秒上手
 
 ```bash
-# 后端（必须在 backend 目录内运行，否则 uvicorn 找不到 main）
-cd math-tutor-demo/backend
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+# 后端（必须在 backend 目录内运行；app 是 Python 包，入口为 app.main:app）
+cd backend
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 # 前端：直接用浏览器打开（静态文件，无需构建）
 #   web/index.html   ← 入口
 ```
 
-- **Python**：3.14（系统已装；依赖见 `requirements.txt`，纯标准库 + fastapi/uvicorn/sympy/pillow/python-multipart）。
-- **密钥**：`math-tutor-demo/backend/.env`（**已 gitignore**，当前含真实 key——交接时注意脱敏/轮换）。
-- **数据**：`math-tutor-demo/backend/data/{users.db, exams.db}`（SQLite，已 gitignore）。
+- **Python**：3.14（系统已装；依赖见 `backend/requirements.txt`，纯标准库 + fastapi/uvicorn/sympy/pillow/python-multipart）。
+- **密钥**：`backend/.env`（**已 gitignore**，当前含真实 key——交接时注意脱敏/轮换）。所有模块只经 `backend/app/config.py` 读取密钥，源码里无硬编码 key。
+- **数据**：`backend/data/{users.db, exams.db}`（SQLite，已 gitignore）。
 - **外部服务**：一个 **new-api 网关** `https://www.computinger.com`，同时提供 Claude（Anthropic 兼容）和 `nex-n2-pro`（OpenAI 兼容视觉 OCR）。**该网关延迟高且抖动大**（见 §6 坑）。
 - **当前后端进程**：**未运行**（需手动启动）。
 
@@ -40,10 +40,17 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 ```
 math/
-├── HANDOFF.md                      ← 本文件
-├── DEVELOPMENT_PLAN.md             ← 蓝图对齐的分阶段路线图（v1）
-├── README.md                       ← ⚠️ 已过时（仍写 p5.js / 手动输入 OCR，待更新）
-├── Designing AI Math Education Software.md, Evolving AI Math.pdf, pdf_content.txt  ← 设计/蓝图原文
+├── README.md                       ← 项目说明（已更新到当前结构）
+├── .gitignore                      ← 忽略 .env / data/ / backup/ / __pycache__ 等
+│
+├── docs/                           ← 文档
+│   ├── HANDOFF.md                  ← 本文件
+│   ├── DEVELOPMENT_PLAN.md         ← 蓝图对齐的分阶段路线图（v1）
+│   └── design/                     ← 设计/蓝图原文
+│       ├── Designing AI Math Education Software.md
+│       ├── Evolving AI Math.pdf
+│       └── pdf_content.txt
+│
 ├── lesson/README.md                ← 知识点分类法（考试出题的数据源，见 §5）
 │
 ├── web/                            ← 前端（纯静态 HTML+CSS+JS，CDN 加载库，无构建步骤）
@@ -52,31 +59,33 @@ math/
 │   ├── demo_sellection.html        ← 选年级(1–6)+知识点（两张表，可加多个）→ 启动 demo
 │   ├── demo_exam.html              ← 自动出题考试入口（见 §5）
 │   ├── demo_standalone.html        ← 核心辅导界面（白板/OCR/Claude 聊天/提示/动画）+ 考试模式
-│   └── backup/demo_standalone.html ← 旧备份（忽略）
+│   └── legacy/                     ← 早期 React/Vite 原型（仅供参考，**未使用**）
 │
-└── math-tutor-demo/
-    ├── backend/                    ← 后端（FastAPI）
-    │   ├── main.py                 ← ★主程序（2105 行单体，所有路由+核心类）
-    │   ├── config.py               ← .env 加载 + Claude/OCR 配置（自写 dotenv，无 python-dotenv 依赖）
+└── backend/                        ← 后端（FastAPI）
+    ├── app/                        ← ★Python 包，入口 app.main:app
+    │   ├── __init__.py
+    │   ├── main.py                 ← ★主程序（2100+ 行单体，所有路由+核心类）
+    │   ├── config.py               ← .env 加载 + Claude/OCR 配置（唯一读密钥处；自写 dotenv，无 python-dotenv 依赖）
     │   ├── claude_service.py       ← Claude 网关客户端（urllib，超时/断路器/限速）
     │   ├── recognize.py            ← nex-n2-pro 视觉 OCR（urllib，含图像预处理）
     │   ├── prompts.py              ← Claude 系统提示（Socratic 提示 / 聊天 / 出题 JSON）
     │   ├── auth.py                 ← 账户/会话（SQLite, PBKDF2, 限速）
-    │   ├── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
-    │   ├── requirements.txt        ← 依赖（已移除 easyocr/pytesseract）
-    │   ├── .env                    ← 密钥（gitignore；含真实值）
-    │   ├── .env.example            ← 密钥模板
-    │   ├── data/{users.db,exams.db}← SQLite 数据（gitignore）
-    │   └── app/                    ← ⚠️ 见 §7：未完成的重构脚手架，**未被使用**，建议删除或完成
-    └── frontend/                   ← ⚠️ 早期 React/Vite 脚手架，**未使用**（无 node，跑的是 web/ 静态版）
+    │   └── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
+    ├── requirements.txt            ← 依赖（已移除 easyocr/pytesseract）
+    ├── .env                        ← 密钥（gitignore；含真实值）
+    ├── .env.example                ← 密钥模板
+    └── data/{users.db,exams.db}    ← SQLite 数据（gitignore）
 ```
+
+> 注：包内模块改用相对导入（`from . import config` 等）；`.env` 与 `data/` 位于
+> `backend/` 根（包外一层），`config.py` 用 `__file__.parent.parent / .env` 定位。
 
 ---
 
 ## 3. 后端架构
 
 ### 3.1 运行与启动注意
-- **必须从 `backend/` 目录启动**（`uvicorn main:app`），否则报 `Could not import module "main"`。
+- **必须从 `backend/` 目录启动**（`uvicorn app.main:app`），否则报 `Could not import module "app.main"`。
 - 启动日志会打印三行健康状态：OCR 网关是否配置、用户数、题库题数。
 - 单进程；SQLite 每次操作开新连接（FastAPI 线程池下安全，demo 规模够用）。
 - `@app.post("/recognize")` 用 `run_in_threadpool` 包裹阻塞的 urllib OCR 调用，避免冻结事件循环。
@@ -154,7 +163,7 @@ math/
 1. **`nex-n2-pro` 是推理模型**：先输出 `reasoning_content` 再给 `content`。`max_tokens` 太小会在"思考"中耗尽 → `content` 为空。已设 `NEX_OCR_MAX_TOKENS=1500` 并发送 `chat_template_kwargs:{enable_thinking:false}`。
 2. **网关延迟极不稳定**：同一请求见过 5s / 27s / 37s / >150s。是 `computinger.com`（new-api）侧拥塞，非代码问题。`NEX_OCR_TIMEOUT=90`。**不要并发猛打同一 token**（会自我拥塞导致超时）。多智能体/批量调用务必加并发上限与缓存。
 3. **`recognize.py` 输出清洗**：模型常返回 `$$...$$`、`\text{}`、并把字符空格化（"1 5"），清洗器会去 `$`、LaTeX、并删除**所有空格**，使 SymPy 可解析。
-4. **`polyfill.io` 脚本**：`demo_standalone.html` / `demo_exam.html` 的 `<head>` 仍引了已失效的 `polyfill.io` 同步脚本，会**拖死页面加载**。headless 验证时需 abort 它；**建议尽早删除该行**。
+4. **`polyfill.io` 脚本（历史坑，已修）**：曾在 `demo_standalone.html` `<head>` 引用已失效的 `polyfill.io` 同步脚本拖死加载，现已删除。若日后从旧备份恢复页面，注意别把它带回来。
 5. **uvicorn 必须在 backend 目录启动**（否则 import 失败）。
 6. **Windows 控制台 cp1252**：用 Python 打印中文会 `UnicodeEncodeError`，调试时加 `PYTHONIOENCODING=utf-8`。
 7. **Git Bash 的 `/tmp` ≠ 可被 Python 直接读的路径**：跨 curl→python 传文件用绝对路径或 stdin 管道。
@@ -165,12 +174,17 @@ math/
 
 ## 7. 待办 / 清理项（给接手者的建议起点）
 
-- [ ] **决定 `app/` 去留**：`backend/app/` 是一个**未完成的分包重构脚手架**（只有空 `__init__.py` + 残留 `.pyc`），`main.py` **完全没引用它**。要么完成"`main.py` 拆分到 `app/` 包"的重构，要么删除以免误导。
-- [ ] **删 `polyfill.io`** 那行 `<script>`（坑 #4）。
-- [ ] **更新 `README.md`**（现状已变：web/ 入口、nex OCR、Claude、auth、exam 都没写）。
+**已完成（2026-06-26 结构化重构）：**
+- [x] **仓库结构化**：删除 `math-tutor-demo/` 套层 → `backend/` + `web/` 提升到根；后端归入 `backend/app/` 包（相对导入，入口 `app.main:app`）；文档归入 `docs/`（设计稿在 `docs/design/`）。
+- [x] **完成 `app/` 分包重构**：原空脚手架已替换为真实包，`main.py` 等全部迁入，导入/路径已修复并运行验证通过。
+- [x] **删 `polyfill.io`** 那行 `<script>`（坑 #4，已删）。
+- [x] **更新 `README.md`**（已重写到当前结构 + 密钥设置说明）。
+- [x] **初始化 git 仓库并接 GitHub**：`git@github.com:SkyPhy/math-tutor`（SSH），`.env`/`data/`/`backup/` 均已 gitignore，未上传密钥。
+- [x] **合并 `frontend/`**：早期 React 原型迁到 `web/legacy/`（仅参考，去掉 `dist/` 构建产物）。
+
+**仍待办：**
 - [ ] **`ExperienceMemory` 持久化**到 SQLite（见 DEVELOPMENT_PLAN 阶段 1）——目前重启即失。
-- [ ] **初始化 git 仓库**（当前**不是 git repo**）。`.gitignore` 已就绪（忽略 `.env`、`data/`、`*.db`、`__pycache__` 等）。
-- [ ] 可选：清理未用的 `math-tutor-demo/frontend/`（React 脚手架，从未启用）。
+- [ ] **轮换密钥**：`.env` 含真实 key（坑 #9），交接后请轮换 `NEX_OCR_API_KEY` 与 `CLAUDE_API_KEY`。
 - [ ] 安全：`/exam/*`、`/analyze` 等均无鉴权（按设计）；如需多用户隔离再用 `require_user`。
 
 ---
@@ -179,7 +193,7 @@ math/
 
 本项目历来用"**运行并观测真实行为**"验证，而非只跑单测：
 - 后端：`curl` / Python `urllib` 打接口看返回。
-- 前端：headless Chrome（`puppeteer-core`，Chrome 在 `C:/Program Files/Google/Chrome/Application/chrome.exe`）驱动页面、截图、断言 DOM。验证时记得 abort `polyfill.io`。
+- 前端：headless Chrome（`puppeteer-core`，Chrome 在 `C:/Program Files/Google/Chrome/Application/chrome.exe`）驱动页面、截图、断言 DOM。
 - 接手后改任何东西，请同样"跑起来看"，并注意网关慢调用要给足超时。
 
 ---
@@ -188,12 +202,13 @@ math/
 
 | 想改… | 看这里 |
 |-------|--------|
-| 接口/路由/核心类 | `math-tutor-demo/backend/main.py` |
-| Claude 连接 | `claude_service.py` + `config.py`（`CLAUDE_*`）|
-| 手写 OCR | `recognize.py` + `config.py`（`NEX_OCR_*`）|
-| 提示词（Socratic/聊天/出题） | `prompts.py` |
-| 账户/登录 | `auth.py` + `web/sign{in,up}.html` |
-| 出题/题库/标签 | `exam.py` + `web/demo_exam.html` + `lesson/README.md` |
+| 接口/路由/核心类 | `backend/app/main.py` |
+| Claude 连接 | `backend/app/claude_service.py` + `config.py`（`CLAUDE_*`）|
+| 手写 OCR | `backend/app/recognize.py` + `config.py`（`NEX_OCR_*`）|
+| 提示词（Socratic/聊天/出题） | `backend/app/prompts.py` |
+| 密钥/配置 | `backend/.env`（真实值，gitignore）+ `backend/app/config.py`（唯一读取处）|
+| 账户/登录 | `backend/app/auth.py` + `web/sign{in,up}.html` |
+| 出题/题库/标签 | `backend/app/exam.py` + `web/demo_exam.html` + `lesson/README.md` |
 | 核心辅导/白板/考试模式 | `web/demo_standalone.html` |
-| 路线图 | `DEVELOPMENT_PLAN.md` |
+| 路线图 | `docs/DEVELOPMENT_PLAN.md` |
 ```

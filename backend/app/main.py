@@ -44,22 +44,22 @@ import os
 import html as html_lib
 import urllib.request
 import urllib.parse
-import recognize  # nex-n2-pro vision handwriting recognition (recognize.py)
+from . import recognize  # nex-n2-pro vision handwriting recognition (recognize.py)
 
 # ── Claude integration (Anthropic-compatible gateway) ──────────────────────
 # These power the AI tutor. If the gateway is not configured (.env absent),
 # claude_service.available() is False and every call site falls back to the
 # deterministic template SocraticEngine, so the demo always works.
-import config
-import prompts
-from claude_service import claude_service, ClaudeError
+from . import config
+from . import prompts
+from .claude_service import claude_service, ClaudeError
 
 # User accounts & sessions, backed by SQLite (auth.py / users.db).
-import auth
+from . import auth
 
 # Exam question bank — AI-generated questions tagged across two dimensions,
 # stored in SQLite with tag-indexed lookup (exam.py / exams.db).
-import exam
+from . import exam
 import json as _json
 import re as _re
 
@@ -2101,5 +2101,8 @@ def plot_solution(request: MathRequest):
     return SymPyPlotter.build(request.expression)
 
 
+# Run from the backend/ directory:  uvicorn app.main:app --host 0.0.0.0 --port 8000
+# (or `python -m app.main`). main.py is a package module now, so relative
+# imports require it be launched as `app.main`, not as a bare script.
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

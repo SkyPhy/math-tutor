@@ -24,9 +24,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
-# All persistent data lives in a dedicated `data/` directory (created on first
-# import) so the SQLite files aren't scattered through the backend source.
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# All persistent data lives in backend/data/ (one level up from this app/
+# package), created on first import, so the SQLite files aren't scattered
+# through the backend source.
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "users.db")
 

@@ -28,7 +28,7 @@ import urllib.request
 import urllib.error
 from typing import List
 
-import config
+from . import config
 
 
 # The instruction we give the vision model. Kept terse and strict so it returns

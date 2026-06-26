@@ -1,13 +1,20 @@
-# ── Secrets & local data (never commit) ───────────────────────────────────
-# API keys / gateway config
+# ── Secrets & local data (NEVER commit) ───────────────────────────────────
+# API keys / gateway config. The real keys live ONLY in backend/.env, which is
+# created from backend/.env.example by each developer (see README "Setup").
+backend/.env
 math-tutor-demo/backend/.env
 .env
+.env.local
 
 # Persistent data — user accounts/password hashes + exam bank (SQLite)
+backend/data/
 math-tutor-demo/backend/data/
 *.db
 *.sqlite
 *.sqlite3
+
+# Full local project backups (backup #2) — never upload
+backup/
 
 # ── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
@@ -17,8 +24,9 @@ __pycache__/
 venv/
 env/
 
-# ── Node (frontend scaffold) ───────────────────────────────────────────────
+# ── Node (frontend tooling) ────────────────────────────────────────────────
 node_modules/
+dist/
 
 # ── OS / editor noise ──────────────────────────────────────────────────────
 .DS_Store

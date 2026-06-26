@@ -22,7 +22,7 @@ from collections import deque
 from threading import Lock
 from typing import List, Dict, Optional
 
-import config
+from . import config
 
 
 class ClaudeError(Exception):

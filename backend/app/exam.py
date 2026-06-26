@@ -24,8 +24,9 @@ import secrets
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
-# Persistent data lives in the shared `data/` directory (see auth.py).
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# Persistent data lives in the shared backend/data/ directory (see auth.py),
+# one level up from this app/ package.
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "exams.db")
 

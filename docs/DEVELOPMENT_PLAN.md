@@ -1,7 +1,7 @@
 # 自演化 AI 数学教育系统 · 开发计划（蓝图对齐版）
 
 > 依据：《Strategic Planning and Architectural Blueprint for Self-Evolving Autonomous Software Systems》
-> 对象：本仓库现有代码库（`math-tutor-demo/backend/` + `web/`）
+> 对象：本仓库现有代码库（`backend/app/` + `web/`）
 > 性质：**新增文档，不覆盖任何现有文件**。本文件是路线图，不是对既有代码的改写。
 > 版本：v1 · 2026-06-24
 

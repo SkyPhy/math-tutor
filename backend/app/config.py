@@ -43,7 +43,9 @@ def _load_dotenv(path: Path) -> None:
         pass
 
 
-_load_dotenv(Path(__file__).resolve().parent / ".env")
+# config.py lives in backend/app/; the .env file sits at backend/.env, one
+# level up. Secrets live ONLY in that file (gitignored) — never in source.
+_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def _parse_models(spec: str) -> List[Dict[str, str]]:
