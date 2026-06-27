@@ -72,6 +72,11 @@ from . import auth
 # stored in SQLite with tag-indexed lookup (exam.py / exams.db).
 from . import exam
 
+# Dynamic tag store — the evolving tag vocabulary in its OWN database
+# (tags.py / tags.db). AI may add fitting tags and any tag may be removed;
+# exam.py's hard-coded catalogues are only the initial seed.
+from . import tags
+
 # Durable experience memory — persisted to SQLite (memory.py / memory.db) so the
 # tutor's adaptive context survives restarts and is shared across sessions.
 from . import memory as memory_store
@@ -117,6 +122,12 @@ def _warmup_ocr() -> None:
     # Exam question bank tables.
     exam.init_db()
     print(f"[startup] Exam bank ready ({exam.bank_size()} questions).")
+    # Dynamic tag vocabulary (own DB). Seed from exam.py's catalogues on first
+    # run only — never re-seed, so AI/user adds and deletes survive restarts.
+    tags.init_db()
+    seeded = tags.seed_from_catalogues()
+    print(f"[startup] Tag store ready ({tags.count()} active tags"
+          + (f", seeded {seeded}" if seeded else "") + ").")
     # Durable experience-memory tables (persists adaptive context across restarts).
     memory_store.init_db()
     print("[startup] Experience memory DB ready.")
@@ -1778,6 +1789,59 @@ def exam_by_tag(tag: str, dimension: Optional[str] = None):
         "dimension": dimension,
         "questions": exam.find_by_tag(tag, dimension),
     }
+
+
+# ── Dynamic tag vocabulary (tags.py / tags.db) ──────────────────────────────
+# The evolving tag set: AI/user may ADD fitting tags and REMOVE any tag (incl.
+# the seeded lesson/README knowledge points). Source of truth once seeded.
+
+class TagCreate(BaseModel):
+    name: str
+    kind: str = tags.KIND_LOGIC
+    parent: Optional[str] = None
+    description: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
+    source: str = "user"
+
+
+@app.get("/tags")
+def tags_list(kind: Optional[str] = None, include_inactive: bool = False):
+    """The dynamic tag vocabulary. Optional `kind` filter
+    ('knowledge'|'logic'|…); `include_inactive=1` also returns soft-deleted."""
+    return {
+        "tags": tags.list_tags(kind=kind, include_inactive=include_inactive),
+        "count": tags.count(),
+    }
+
+
+@app.get("/tags/catalogue")
+def tags_catalogue(include_inactive: bool = False):
+    """Grouped view kind → parent → [tags] — the dynamic replacement for the
+    hard-coded exam catalogues."""
+    return {"catalogue": tags.catalogue(include_inactive=include_inactive),
+            "count": tags.count()}
+
+
+@app.post("/tags")
+def tags_add(body: TagCreate):
+    """Add (or re-activate) a tag — how the AI/user grows the vocabulary with a
+    fitting tag. Idempotent by name."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="tag name is required")
+    tag = tags.add_tag(name, body.kind, parent=body.parent,
+                       description=body.description, meta=body.meta, source=body.source)
+    return {"tag": tag}
+
+
+@app.delete("/tags/{name}")
+def tags_delete(name: str, hard: bool = False):
+    """Remove a tag — soft by default (active=0), `hard=1` deletes the row.
+    Nothing is protected: the seeded lesson/README knowledge points can go too."""
+    ok = tags.remove_tag(name, hard=hard)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"tag not found or already inactive: {name}")
+    return {"removed": name, "hard": hard}
 
 
 #  ═══════════════════════════════════════════════════════════════════════

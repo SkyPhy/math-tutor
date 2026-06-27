@@ -5,6 +5,12 @@
 > 代码基础已随本文落地（`backend/app/exam.py` 新增 `DIM_LOGIC` / `LOGIC_CATALOGUE` / `DIFFICULTY_LEVELS`，
 > **纯增量、不改动现有 25 知识点流程**），但**生成/诊断的接线尚未做**——留待分类定稿。
 > 版本：v0.1 草案 · 2026-06-27
+>
+> **★ 方向更新（v0.2.0a · 2026-06-27）：标签改为「动态、AI 自管理」，存于独立数据库。** 标签不再固定
+> 遵循 `lesson/README.md`：AI 可自行**新增**合适标签、**删除**任何标签（含 lesson 知识点）。本文这 13 类
+> 逻辑标签与 25 个知识点标签现仅作**初始种子**，落地于新库 `backend/app/tags.py`（`data/tags.db`）——
+> 一经播种，**该库即标签词表的事实来源**，`exam.py` 的硬编码目录降级为种子。接口：`GET /tags`、
+> `GET /tags/catalogue`、`POST /tags`（增/复活）、`DELETE /tags/{name}`（软删，`?hard=1` 硬删）。
 
 ---
 
