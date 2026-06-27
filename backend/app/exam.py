@@ -257,6 +257,11 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qtags_dim_tag ON question_tags(dimension, tag)"
         )
+        # Migration: add the 0–9 difficulty column to older banks that predate it
+        # (logic-type + difficulty is the v2.0 core need). Old rows stay NULL.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()}
+        if "difficulty" not in cols:
+            conn.execute("ALTER TABLE questions ADD COLUMN difficulty INTEGER")
         conn.commit()
 
 
@@ -270,10 +275,10 @@ def save_question(q: Dict[str, Any]) -> str:
     created = datetime.now(timezone.utc).isoformat()
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO questions (id, statement, latex, answer, grade, source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO questions (id, statement, latex, answer, grade, difficulty, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (qid, q.get("statement", ""), q.get("latex", ""), q.get("answer", ""),
-             q.get("grade"), q.get("source", "ai"), created),
+             q.get("grade"), q.get("difficulty"), q.get("source", "ai"), created),
         )
         for t in q.get("tags", []):
             conn.execute(
@@ -305,6 +310,7 @@ def _assemble(conn: sqlite3.Connection, row: sqlite3.Row) -> Dict[str, Any]:
         "latex": row["latex"],
         "answer": row["answer"],
         "grade": row["grade"],
+        "difficulty": row["difficulty"] if "difficulty" in row.keys() else None,
         "source": row["source"],
         "created_at": row["created_at"],
         "tags": _tags_for(conn, row["id"]),

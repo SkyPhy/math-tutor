@@ -120,10 +120,13 @@ difficulty:     4
 
 ## 4. 落地次序（把分类接到能力上）
 
-1. **【本步·已落地】数据模型**：`DIM_LOGIC` + `LOGIC_CATALOGUE` + `DIFFICULTY_LEVELS` + 查询助手，
-   纯增量、可导入自检（§5）。**不改现有生成/判分。**
-2. **【待审定后】出题接线**（目标 2/9）：`/exam/generate` 增参 `logic_type=` 与 `difficulty=`，
-   让 Claude 按"逻辑类型 + 难度"出题；`TEMPLATES` 仍兜底覆盖。前端 `demo_exam` 暴露两个新筛选。
+1. **【已落地】数据模型 → 动态标签库**：`DIM_LOGIC` + `LOGIC_CATALOGUE` + `DIFFICULTY_LEVELS`（v0.1.0a）
+   现作 `tags.db` 的种子（v0.2.0a，见上方方向更新）。
+2. **【已落地 v0.2.1a】出题接入动态标签库（自演化）**：单题生成（`/practice/next?generate=1`）已让 AI
+   读 `tags.db` 词表 → 给题打**逻辑类型 + 知识点**标签 + **0–9 难度**（`questions.difficulty` 新列）；
+   现有标签优先复用并 `bump_usage`，没有合适的就**新增标签**（`source='ai'`）并附到该题。真链路验收：
+   「鸡兔同笼」→ `假设调整`+`初步代数思想`、难度 4。**待续**：批量 `/exam/generate` 仍走旧硬编码目录；
+   前端 `demo_exam` 暴露 `logic_type=`/`difficulty=` 筛选。
 3. **【接共识器】逻辑诊断**（目标 5/6 · 核心差异点）：多路共识推理器（`reasoner.py`）的
    **"多路分歧点"天然是诊断种子**——学生在某逻辑类型上反复出错 + 多路在该步分歧，即定位其薄弱思维。
    产出"逻辑缺陷画像"（按 13 类打分），写入 `memory.py`。

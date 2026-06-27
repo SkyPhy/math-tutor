@@ -187,6 +187,51 @@ def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
 - 务必输出合法 JSON，字符串中不要出现未转义的引号或反斜杠。"""
 
 
+def build_tagged_generation_prompt(knowledge_tags: List[str],
+                                   logic_tags: List[Dict[str, str]],
+                                   difficulty_levels: Dict[int, str]) -> str:
+    """System prompt to generate ONE question AND tag it from the LIVE, dynamic
+    vocabulary (tags.db). The model picks existing tags where they fit, and —
+    crucially — may PROPOSE NEW tags when none fit (the self-evolving loop): the
+    backend adds those to the store. Also assigns a 0–9 difficulty.
+
+    `logic_tags` items: {name, move, flaw}. Returns a strict one-element JSON array."""
+    kb = "、".join(knowledge_tags) if knowledge_tags else "（暂无）"
+    lb = "\n".join(
+        f'  - 「{t["name"]}」：{t.get("move") or ""}'
+        + (f"（薄弱信号：{t['flaw']}）" if t.get("flaw") else "")
+        for t in logic_tags
+    ) or "  （暂无）"
+    diff = "\n".join(f"  {lvl} = {desc}" for lvl, desc in sorted(difficulty_levels.items()))
+
+    return f"""你是一位小学数学命题老师。请出 **1 道**适合小学生的中文题，并为它打标签。
+
+【可用「知识点」标签】（按内容选，挑 0–2 个最贴切的，原样照抄）：
+{kb}
+
+【可用「逻辑思维类型」标签】（按这道题主要训练的**解决问题思路**选，挑 1–2 个，第一个为主，原样照抄）：
+{lb}
+
+【难度刻度（0–9，按这道题的推理深度选一个整数）】：
+{diff}
+
+输出要求：
+- 只输出一个 JSON 数组，含且仅含 1 个对象；不要解释、前后缀或 Markdown 代码块。
+- 对象格式严格如下：
+  {{
+    "statement": "<中文题目，简洁、适合小学生>",
+    "latex": "<核心算式的 LaTeX；没有就用空字符串>",
+    "answer": "<参考答案，简短>",
+    "knowledge_tags": ["<从上面知识点标签里选 0–2 个，原样照抄>"],
+    "logic_tags": ["<从上面逻辑思维标签里选 1–2 个，原样照抄，第一个为主>"],
+    "new_tags": [{{"name": "<新标签名>", "kind": "logic 或 knowledge", "reason": "<为何现有标签都不贴切>"}}],
+    "difficulty": <0 到 9 的整数>
+  }}
+- **优先复用现有标签**；只有当现有标签都不能准确刻画这道题的思维类型/知识点时，才在 `new_tags`
+  里提出新标签（没有就给空数组 []）。新「逻辑思维类型」标签要描述一种**解决问题的思路**，不要写成知识点。
+- 务必输出合法 JSON，字符串中不要出现未转义的引号或反斜杠。"""
+
+
 def to_messages(history: List[Dict[str, str]], user_message: str) -> List[Dict[str, str]]:
     """Build the Messages-API `messages` array from prior turns + new input.
     `history` items are {role: 'user'|'assistant', content: str}."""

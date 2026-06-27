@@ -1364,38 +1364,54 @@ def random_problem(
 
 def _bank_to_card(q: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt an exams.db question into the frontend problem-card shape."""
-    tags = q.get("tags", []) or []
-    primary = next((t for t in tags if t.get("primary")), tags[0] if tags else None)
+    qtags = q.get("tags", []) or []
+    primary = next((t for t in qtags if t.get("primary")), qtags[0] if qtags else None)
     topic = ((primary or {}).get("subdimension")
              or (primary or {}).get("tag") or "练习")
+    diff = q.get("difficulty")
+    diff_label = f"难度 {diff}" if isinstance(diff, int) else (str(diff) if diff else "练习")
     return {
         "id": q.get("id"),
         "title": (primary or {}).get("tag") or "练习题",
         "statement": q.get("statement", "") or "",
         "latex": q.get("latex", "") or "",
-        "difficulty": q.get("difficulty") or "练习",
+        "difficulty": diff_label,
         "topic": topic,
-        "tags": tags,
+        "tags": qtags,
         "source": q.get("source", "bank"),
     }
 
 
+def _question_tag_row(name: str, primary: bool = False) -> Dict[str, Any]:
+    """Map a tag NAME (from tags.db) to a question_tags row, resolving its
+    dimension/subdimension from the tag store, falling back to exam's mapping."""
+    t = tags.get_tag(name)
+    if t and t["kind"] == tags.KIND_LOGIC:
+        return {"dimension": exam.DIM_LOGIC, "subdimension": (t.get("parent") or ""),
+                "tag": name, "primary": primary}
+    dim = exam.tag_dimension(name) or exam.DIM_CORE          # knowledge / unknown
+    subdim = exam.tag_subdimension(name) or (t.get("parent") if t else "") or ""
+    return {"dimension": dim, "subdimension": subdim, "tag": name, "primary": primary}
+
+
 def _ai_one_question(grade: Optional[int] = None) -> Optional[Dict[str, Any]]:
-    """Generate ONE fresh question for a random knowledge-point tag via Claude,
-    reusing the exam JSON contract. Returns the saved bank-question dict, or
-    None on any failure / when the gateway is unavailable."""
+    """Generate ONE question AND tag it from the LIVE vocabulary (tags.db) via
+    Claude. Existing tags are reused (usage bumped); any tag the model proposes
+    when nothing fits is ADDED to the store (the self-evolving loop, source='ai').
+    Saves the question with its logic + knowledge tags and a 0–9 difficulty.
+    Returns the saved bank-question dict, or None on failure / gateway down."""
     if not claude_service.available():
         return None
-    entry = random.choice(exam.all_tags())
-    dim, tag, subdim = entry["dimension"], entry["tag"], entry["subdimension"]
-    other_dim = exam.DIM_METHOD if dim == exam.DIM_CORE else exam.DIM_CORE
-    other_tags = [t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim]
-    system = prompts.build_exam_prompt(dim, {subdim: [tag]}, other_dim, other_tags)
+    k_names = [t["name"] for t in tags.list_tags(kind=tags.KIND_KNOWLEDGE)]
+    l_tags = [{"name": t["name"], "move": (t.get("meta") or {}).get("move"),
+               "flaw": (t.get("meta") or {}).get("flaw")}
+              for t in tags.list_tags(kind=tags.KIND_LOGIC)]
+    system = prompts.build_tagged_generation_prompt(k_names, l_tags, exam.DIFFICULTY_LEVELS)
     try:
         text = claude_service.complete(
             system=system,
-            messages=[{"role": "user", "content": "请只为上面这一个知识点出 1 道题，只输出 JSON 数组。"}],
-            session_id="practice-gen", max_tokens=1200, temperature=0.7,
+            messages=[{"role": "user", "content": "请出 1 道题并按要求打标签，只输出 JSON 数组。"}],
+            session_id="practice-gen", max_tokens=1500, temperature=0.7,
         )
     except ClaudeError:
         return None
@@ -1406,15 +1422,59 @@ def _ai_one_question(grade: Optional[int] = None) -> Optional[Dict[str, Any]]:
     statement = (item.get("statement") or "").strip()
     if not statement:
         return None
+
+    known_k, known_l = set(k_names), {t["name"] for t in l_tags}
+
+    # 1) Self-evolving step: register any NEW tags the model proposed.
+    added: List[str] = []
+    added_logic: List[str] = []
+    added_know: List[str] = []
+    for nt in (item.get("new_tags") or []):
+        if not isinstance(nt, dict):
+            continue
+        nm = (nt.get("name") or "").strip()
+        kind = (nt.get("kind") or "").strip()
+        if not nm or kind not in (tags.KIND_LOGIC, tags.KIND_KNOWLEDGE):
+            continue
+        tags.add_tag(nm, kind, description=(nt.get("reason") or "").strip() or None, source="ai")
+        added.append(nm)
+        if kind == tags.KIND_KNOWLEDGE:
+            added_know.append(nm); known_k.add(nm)
+        else:
+            added_logic.append(nm); known_l.add(nm)
+
+    # 2) Resolve chosen tags into question_tags rows; a freshly-added tag is
+    #    attached to the very question that prompted it (not just stored).
+    chosen_logic = [t for t in (item.get("logic_tags") or []) if t in known_l]
+    for nm in added_logic:
+        if nm not in chosen_logic:
+            chosen_logic.append(nm)
+    chosen_know = [t for t in (item.get("knowledge_tags") or []) if t in known_k]
+    for nm in added_know:
+        if nm not in chosen_know:
+            chosen_know.append(nm)
+    qtags = [_question_tag_row(nm, primary=(i == 0)) for i, nm in enumerate(chosen_logic)]
+    qtags += [_question_tag_row(nm, primary=False) for nm in chosen_know]
+    for nm in chosen_logic + chosen_know:
+        tags.bump_usage(nm)
+
+    diff = item.get("difficulty")
+    try:
+        diff = max(0, min(9, int(diff))) if diff is not None else None
+    except (ValueError, TypeError):
+        diff = None
+
     q = {
         "statement": statement,
         "latex": (item.get("latex") or "").strip(),
         "answer": (item.get("answer") or "").strip(),
         "grade": grade,
+        "difficulty": diff,
         "source": "ai",
-        "tags": [{"dimension": dim, "subdimension": subdim, "tag": tag, "primary": True}],
+        "tags": qtags,
     }
     q["id"] = exam.save_question(q)
+    q["new_tags_added"] = added
     return q
 
 

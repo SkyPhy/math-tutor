@@ -11,6 +11,24 @@
 
 ---
 
+## v0.2.1a — 出题接入动态标签库（自演化标签循环）
+
+- **方向**：让 AI 出题时**读取并生长** `tags.db`——按题打**逻辑思维类型 + 知识点**标签，并给 **0–9 难度**；
+  现有标签**优先复用**，没有合适的就**新增标签**（`source='ai'`）并附到这道题上（自演化循环）。
+- **`prompts.py`** 新增 `build_tagged_generation_prompt`：把**当前**词表（知识点 + 逻辑类型含 move/flaw）
+  与难度刻度交给 AI，要求输出 `statement/latex/answer/knowledge_tags/logic_tags/new_tags/difficulty`。
+- **`main.py`** `_ai_one_question` 重写为**标签感知**：从 `tags.db` 取词表 → 调 Claude → 注册 `new_tags`
+  到标签库并附到该题 → 复用标签 `bump_usage` → 存题带逻辑/知识标签 + 难度。新增 `_question_tag_row`
+  把标签名解析为 `question_tags` 行（逻辑→`逻辑思维类型`/族，知识→沿用 `exam` 维度映射）。`_bank_to_card`
+  把整数难度渲染为「难度 N」。
+- **`exam.py`**：`questions` 增 `difficulty INTEGER` 列（对旧库**安全迁移**，旧行 NULL）；`save_question`/
+  `_assemble` 透传难度。
+- **验证**：离线（迁移生效、提示词完整、`_question_tag_row` 解析、**monkeypatch 自演化分支**：新标签
+  `极限思想` 入库[source=ai]并附到题、旧标签 usage+1、难度落库）；**真链路** `POST /practice/next?generate=1`
+  生成「鸡兔同笼」并自动打标签 `假设调整`（主）+`初步代数思想`、难度 4、两标签 usage 均 +1。
+- **范围**：仅单题生成路径（`/practice/next?generate=1`，前端在用）已接入；批量 `/exam/generate`（25 题）
+  仍走旧硬编码目录，留待后续迁移。诊断（目标 5/6）仍未做。
+
 ## v0.2.0a — 动态、AI 自管理的标签库（独立数据库）
 
 - **方向（用户定向）**：标签**不再固定遵循 `lesson/README.md`**——AI 可自行**新增**合适标签、
