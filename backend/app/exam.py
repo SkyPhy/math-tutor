@@ -346,6 +346,13 @@ def find_by_tag(tag: str, dimension: Optional[str] = None) -> List[Dict[str, Any
         return out
 
 
+def get_question(qid: str) -> Optional[Dict[str, Any]]:
+    """One question (with its tags) by id, or None."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM questions WHERE id = ?", (qid,)).fetchone()
+        return _assemble(conn, row) if row else None
+
+
 def find_by_dimension(dimension: str) -> List[Dict[str, Any]]:
     with _connect() as conn:
         ids = conn.execute(

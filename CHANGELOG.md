@@ -11,6 +11,24 @@
 
 ---
 
+## v0.2.2a — 逻辑缺陷诊断 + 按薄弱逻辑类型自适应出题（目标 5/6）
+
+- **方向**：找出学生（与 AI 自身）**薄弱的逻辑思维类型**，据此**针对性出题**——而非按知识点刷题。
+- **新增 `backend/app/diagnosis.py`（`data/diagnosis.db`）**：两类信号，均按动态标签归集——
+  - **学生**：`tag_outcomes(session_id, tag, kind, attempts, successes)`，由 `/verify` 判分喂入；
+    `student_profile` 给每标签正确率 + **薄弱逻辑类型排名**（仅 logic 类、正确率 < 0.6 计为缺陷）；
+    `weak_logic_tags` 供自适应出题取最弱项。
+  - **AI 自身**：`self_signals(tag, graded, agreement_sum, low_agreement)`——记录本机**多路共识的一致度**，
+    一致度低（< 0.67）即该类型自身推理薄弱；`self_profile` 按**分歧度**（1−平均一致度）排名（目标 6 自诊断种子）。
+- **`main.py`**：`MathRequest` 增 `question_id`；`/verify` 判分后经 `_record_diagnosis` 按题目标签同时
+  记录**学生结果**与 **AI 自一致度**；新增 `GET /diagnosis/{session_id}`（学生画像 + `suggested_focus`）、
+  `GET /diagnosis/self`（AI 自画像）。`/practice/next` 增 `?focus_logic=X`（训练指定逻辑类型）与
+  `?adaptive=<session>`（自动取该会话最弱逻辑类型出题）。`exam.get_question(id)` 供按题取标签。
+- **`prompts.build_tagged_generation_prompt`** 增 `focus_logic`，把"重点训练某逻辑类型"写入出题指令。
+- **验证**：离线（记录 1/3 正确→`逆向倒推` 判为薄弱、self 分歧度 0.6）；**真链路全闭环**——
+  `?focus_logic=逆向倒推` 生成"糖果倒推"题（主标签 `逆向倒推`）→ `/verify` 答错→ `/diagnosis/{session}`
+  报 `逆向倒推` 薄弱（suggested_focus）→ `?adaptive=<session>` 自动锁定 `逆向倒推` 再出题。
+
 ## v0.2.1a — 出题接入动态标签库（自演化标签循环）
 
 - **方向**：让 AI 出题时**读取并生长** `tags.db`——按题打**逻辑思维类型 + 知识点**标签，并给 **0–9 难度**；

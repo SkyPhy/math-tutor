@@ -77,6 +77,11 @@ from . import exam
 # exam.py's hard-coded catalogues are only the initial seed.
 from . import tags
 
+# Logic-flaw diagnosis (diagnosis.py / diagnosis.db) — per-student weak logic
+# types (from /verify grading) + AI-self consensus-divergence signals. Drives
+# adaptive "出题 by weak logic-type" (v2.0 goals 5/6).
+from . import diagnosis
+
 # Durable experience memory — persisted to SQLite (memory.py / memory.db) so the
 # tutor's adaptive context survives restarts and is shared across sessions.
 from . import memory as memory_store
@@ -128,6 +133,9 @@ def _warmup_ocr() -> None:
     seeded = tags.seed_from_catalogues()
     print(f"[startup] Tag store ready ({tags.count()} active tags"
           + (f", seeded {seeded}" if seeded else "") + ").")
+    # Logic-flaw diagnosis tables (student outcomes + AI-self consensus signals).
+    diagnosis.init_db()
+    print("[startup] Diagnosis DB ready.")
     # Durable experience-memory tables (persists adaptive context across restarts).
     memory_store.init_db()
     print("[startup] Experience memory DB ready.")
@@ -172,6 +180,7 @@ class MathRequest(BaseModel):
     session_id: Optional[str] = None
     model: Optional[str] = None   # Claude model id for the dropdown; None → default
     answer: Optional[str] = None  # student's own answer, for /verify grading (None → just solve)
+    question_id: Optional[str] = None  # bank question id → grade feeds logic-flaw diagnosis
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -1394,19 +1403,22 @@ def _question_tag_row(name: str, primary: bool = False) -> Dict[str, Any]:
     return {"dimension": dim, "subdimension": subdim, "tag": name, "primary": primary}
 
 
-def _ai_one_question(grade: Optional[int] = None) -> Optional[Dict[str, Any]]:
+def _ai_one_question(grade: Optional[int] = None,
+                     focus_logic: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Generate ONE question AND tag it from the LIVE vocabulary (tags.db) via
     Claude. Existing tags are reused (usage bumped); any tag the model proposes
     when nothing fits is ADDED to the store (the self-evolving loop, source='ai').
     Saves the question with its logic + knowledge tags and a 0–9 difficulty.
-    Returns the saved bank-question dict, or None on failure / gateway down."""
+    `focus_logic` (a weak logic type from diagnosis) biases the question to TRAIN
+    it. Returns the saved bank-question dict, or None on failure / gateway down."""
     if not claude_service.available():
         return None
     k_names = [t["name"] for t in tags.list_tags(kind=tags.KIND_KNOWLEDGE)]
     l_tags = [{"name": t["name"], "move": (t.get("meta") or {}).get("move"),
                "flaw": (t.get("meta") or {}).get("flaw")}
               for t in tags.list_tags(kind=tags.KIND_LOGIC)]
-    system = prompts.build_tagged_generation_prompt(k_names, l_tags, exam.DIFFICULTY_LEVELS)
+    system = prompts.build_tagged_generation_prompt(
+        k_names, l_tags, exam.DIFFICULTY_LEVELS, focus_logic=focus_logic)
     try:
         text = claude_service.complete(
             system=system,
@@ -1479,19 +1491,30 @@ def _ai_one_question(grade: Optional[int] = None) -> Optional[Dict[str, Any]]:
 
 
 @app.get("/practice/next")
-def practice_next(exclude_id: Optional[str] = None, generate: bool = False):
+def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
+                  focus_logic: Optional[str] = None, adaptive: Optional[str] = None):
     """One practice problem for the core tutoring UI.
 
     Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB:
-      • default      → a random question from the existing bank
-      • ?generate=1  → generate a fresh AI question (gateway up), else the bank
+      • default          → a random question from the existing bank
+      • ?generate=1      → generate a fresh AI question (gateway up), else the bank
+      • ?focus_logic=X   → generate one that TRAINS logic type X
+      • ?adaptive=<sid>  → generate one targeting THIS session's weakest logic type
+                           (from diagnosis); generation is implied
     An empty bank is auto-seeded with template questions, so the UI always works
     even offline. Replaces the old /problems/random (OpenTDB) data path.
     """
+    # Adaptive: derive the focus from the session's diagnosed weakest logic type.
+    if adaptive and not focus_logic:
+        weak = diagnosis.weak_logic_tags(adaptive, limit=1)
+        focus_logic = weak[0] if weak else None
+    if adaptive or focus_logic:
+        generate = True
+
     if generate:                       # opt-in AI generation, bank as fallback
-        q = _ai_one_question()
+        q = _ai_one_question(focus_logic=focus_logic)
         if q is not None:
-            return {**_bank_to_card(q), "generated": True}
+            return {**_bank_to_card(q), "generated": True, "focus_logic": focus_logic}
 
     q = exam.random_question(exclude_id=exclude_id)
     if q is None:                      # empty bank → seed templates, then serve
@@ -1904,6 +1927,24 @@ def tags_delete(name: str, hard: bool = False):
     return {"removed": name, "hard": hard}
 
 
+# ── Logic-flaw diagnosis (diagnosis.py) ─────────────────────────────────────
+
+@app.get("/diagnosis/self")
+def diagnosis_self(limit: Optional[int] = None):
+    """AI-self logic profile: logic types where the tutor's OWN multi-path
+    consensus diverges most (its own shaky reasoning). Goal 6 self-diagnosis seed."""
+    return diagnosis.self_profile(limit=limit)
+
+
+@app.get("/diagnosis/{session_id}")
+def diagnosis_student(session_id: str):
+    """Per-student logic-flaw profile: per-tag success + ranked weak logic types,
+    plus a suggested focus (the weakest) for adaptive 出题 (goals 5/2)."""
+    prof = diagnosis.student_profile(session_id)
+    prof["suggested_focus"] = prof["weak_logic"][0]["tag"] if prof["weak_logic"] else None
+    return prof
+
+
 #  ═══════════════════════════════════════════════════════════════════════
 #  AUTH — sign up / sign in / sign out / current user (SQLite-backed)
 #  ═══════════════════════════════════════════════════════════════════════
@@ -2086,6 +2127,27 @@ def _check_student_answer(expression: str, answer: str, session_id: Optional[str
             "reason": cg.get("reason")}
 
 
+def _record_diagnosis(session_id: Optional[str], question_id: Optional[str],
+                      is_correct: Optional[bool], agreement: Optional[float]) -> None:
+    """Feed a graded attempt into logic-flaw diagnosis: per the question's tags,
+    record the STUDENT outcome (per session) and the AI-SELF consensus signal
+    (global). No-op without a question_id (we need the question's tags)."""
+    if not question_id:
+        return
+    q = exam.get_question(question_id)
+    if not q:
+        return
+    for t in q.get("tags", []):
+        tag, dim = t.get("tag"), t.get("dimension")
+        if not tag:
+            continue
+        kind = tags.KIND_LOGIC if dim == exam.DIM_LOGIC else tags.KIND_KNOWLEDGE
+        if session_id and is_correct is not None:
+            diagnosis.record_student_outcome(session_id, tag, kind, bool(is_correct))
+        if kind == tags.KIND_LOGIC and agreement is not None:
+            diagnosis.record_self_signal(tag, kind, agreement)
+
+
 @app.post("/verify")
 def verify_expression(request: MathRequest):
     """
@@ -2138,6 +2200,10 @@ def verify_expression(request: MathRequest):
                 request.session_id, request.expression, hint_level, bool(is_correct),
             )
             response["adaptive_context"] = memory.get_adaptive_context(request.session_id)
+        # Logic-flaw diagnosis: attribute this outcome to the question's logic
+        # types (student profile) + record the AI's own consensus health (self).
+        _record_diagnosis(request.session_id, request.question_id, is_correct,
+                          verdict.get("agreement"))
 
     return response
 
