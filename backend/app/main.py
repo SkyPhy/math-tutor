@@ -1408,7 +1408,7 @@ def _ai_one_question(grade: Optional[int] = None,
     """Generate ONE question AND tag it from the LIVE vocabulary (tags.db) via
     Claude. Existing tags are reused (usage bumped); any tag the model proposes
     when nothing fits is ADDED to the store (the self-evolving loop, source='ai').
-    Saves the question with its logic + knowledge tags and a 0–9 difficulty.
+    Saves the question with its logic + knowledge tags and an open-ended difficulty.
     `focus_logic` (a weak logic type from diagnosis) biases the question to TRAIN
     it. Returns the saved bank-question dict, or None on failure / gateway down."""
     if not claude_service.available():
@@ -1472,7 +1472,8 @@ def _ai_one_question(grade: Optional[int] = None,
 
     diff = item.get("difficulty")
     try:
-        diff = max(0, min(9, int(diff))) if diff is not None else None
+        # Open-ended ladder: floor at the minimum anchor, no upper cap.
+        diff = max(exam.DIFFICULTY_MIN, int(diff)) if diff is not None else None
     except (ValueError, TypeError):
         diff = None
 

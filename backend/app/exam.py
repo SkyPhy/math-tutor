@@ -86,20 +86,24 @@ def tag_subdimension(tag: str) -> Optional[str]:
 #   it yet (generation/diagnosis wiring is a later, reviewed step).
 DIM_LOGIC = "逻辑思维类型"
 
-# Reasoning-depth ladder (0–9), INDEPENDENT of grade/knowledge point. Anchor
-# names are a guide, not a hard grade binding — any logic type can be posed at
-# any rung. Distinct from questions.grade (年级归属) — this is 思维难度.
+# Difficulty ladder — OPEN-ENDED (no hard upper limit). Difficulty COMBINES the
+# knowledge-content level AND the logic-thinking difficulty: a problem with an
+# easy knowledge point but a hard thinking type (倒推/假设/分类讨论…) ranks higher
+# than its content level alone. Anchored by the user: 1 = 认识数字 (most basic),
+# 10 = 大学通识课; values ABOVE 10 are valid (olympiad/research). The labels below
+# are content-level guides, not grade bindings. Distinct from questions.grade.
+DIFFICULTY_MIN = 1
 DIFFICULTY_LEVELS: Dict[int, str] = {
-    0: "启蒙（幼儿园）· 直观单步、具体实物",
-    1: "低年级 I · 单步、20 以内",
-    2: "低年级 II · 单步百以内 / 简单两步",
-    3: "中年级 I · 两步、引入解题策略",
-    4: "中年级 II · 多步、需选择策略",
-    5: "高年级 I · 分数/比例、抽象关系",
-    6: "高年级 II · 多步多策略组合",
-    7: "初中过渡 · 代数化、形式化推理",
-    8: "高中 / 竞赛初步 · 多策略嵌套",
-    9: "大学通识 / 奥赛 · 抽象建模、严密论证",
+    1: "认识数字 · 数物体、认读数（最基础）",
+    2: "低年级 · 20 以内加减、直观单步",
+    3: "低年级 · 百以内运算 / 简单两步",
+    4: "中年级 · 两步、引入解题策略",
+    5: "中年级 · 多步、需选择策略",
+    6: "高年级 · 分数/比例、抽象关系",
+    7: "高年级 · 多步多策略组合",
+    8: "初中过渡 · 代数化、形式化推理",
+    9: "高中 / 竞赛初步 · 多策略嵌套",
+    10: "大学通识课 · 抽象建模、严密论证",
 }
 
 #   family (subdimension) → [ {tag, move, flaw} ]
@@ -159,8 +163,13 @@ def logic_tag_info(tag: str) -> Optional[Dict[str, str]]:
 
 
 def difficulty_label(level: int) -> str:
-    """Anchor description for a 0–9 difficulty rung ('' if out of range)."""
-    return DIFFICULTY_LEVELS.get(level, "")
+    """Anchor description for a difficulty rung. The ladder is OPEN-ENDED:
+    values above the top anchor (10) are valid (olympiad / research-level)."""
+    if level in DIFFICULTY_LEVELS:
+        return DIFFICULTY_LEVELS[level]
+    if level > max(DIFFICULTY_LEVELS):
+        return f"竞赛 / 研究级（难度 {level}）"
+    return ""
 
 
 # ── Template question bank (deterministic fallback, one per tag) ───────────
@@ -257,7 +266,7 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qtags_dim_tag ON question_tags(dimension, tag)"
         )
-        # Migration: add the 0–9 difficulty column to older banks that predate it
+        # Migration: add the difficulty column to older banks that predate it
         # (logic-type + difficulty is the v2.0 core need). Old rows stay NULL.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()}
         if "difficulty" not in cols:
