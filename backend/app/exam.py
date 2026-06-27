@@ -370,3 +370,27 @@ def coverage() -> Dict[str, Any]:
 def bank_size() -> int:
     with _connect() as conn:
         return conn.execute("SELECT COUNT(*) AS n FROM questions").fetchone()["n"]
+
+
+def seed_templates() -> int:
+    """Populate an EMPTY bank with one deterministic template question per tag so
+    the practice feed always has Chinese elementary-math problems — even with no
+    gateway/network. No-op (returns 0) when the bank already holds questions."""
+    if bank_size() > 0:
+        return 0
+    n = 0
+    for entry in all_tags():
+        save_question(template_question(entry["tag"]))
+        n += 1
+    return n
+
+
+def random_question(exclude_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """One random question from the EXISTING bank (exams.db), or None if empty.
+    `exclude_id` avoids handing back the question currently on screen."""
+    qs = list_questions()
+    if exclude_id and len(qs) > 1:
+        qs = [q for q in qs if q.get("id") != exclude_id]
+    if not qs:
+        return None
+    return secrets.choice(qs)

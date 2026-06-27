@@ -1343,6 +1343,94 @@ def random_problem(
     return random.choice(pool)
 
 
+# ── Practice feed: own question bank (exams.db) + AI generation ──────────
+#
+# The core tutoring UI (demo_standalone.html) draws practice problems from the
+# project's OWN bank — questions written by AI (/exam/generate) or seeded from
+# templates — instead of the external OpenTDB trivia feed above. This keeps the
+# practice stream on-topic (Chinese elementary math) and aligned with the
+# de-symbolization direction. /problems(/random) remain as legacy endpoints.
+
+def _bank_to_card(q: Dict[str, Any]) -> Dict[str, Any]:
+    """Adapt an exams.db question into the frontend problem-card shape."""
+    tags = q.get("tags", []) or []
+    primary = next((t for t in tags if t.get("primary")), tags[0] if tags else None)
+    topic = ((primary or {}).get("subdimension")
+             or (primary or {}).get("tag") or "练习")
+    return {
+        "id": q.get("id"),
+        "title": (primary or {}).get("tag") or "练习题",
+        "statement": q.get("statement", "") or "",
+        "latex": q.get("latex", "") or "",
+        "difficulty": q.get("difficulty") or "练习",
+        "topic": topic,
+        "tags": tags,
+        "source": q.get("source", "bank"),
+    }
+
+
+def _ai_one_question(grade: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Generate ONE fresh question for a random knowledge-point tag via Claude,
+    reusing the exam JSON contract. Returns the saved bank-question dict, or
+    None on any failure / when the gateway is unavailable."""
+    if not claude_service.available():
+        return None
+    entry = random.choice(exam.all_tags())
+    dim, tag, subdim = entry["dimension"], entry["tag"], entry["subdimension"]
+    other_dim = exam.DIM_METHOD if dim == exam.DIM_CORE else exam.DIM_CORE
+    other_tags = [t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim]
+    system = prompts.build_exam_prompt(dim, {subdim: [tag]}, other_dim, other_tags)
+    try:
+        text = claude_service.complete(
+            system=system,
+            messages=[{"role": "user", "content": "请只为上面这一个知识点出 1 道题，只输出 JSON 数组。"}],
+            session_id="practice-gen", max_tokens=1200, temperature=0.7,
+        )
+    except ClaudeError:
+        return None
+    arr = _parse_json_array(text)
+    if not arr or not isinstance(arr[0], dict):
+        return None
+    item = arr[0]
+    statement = (item.get("statement") or "").strip()
+    if not statement:
+        return None
+    q = {
+        "statement": statement,
+        "latex": (item.get("latex") or "").strip(),
+        "answer": (item.get("answer") or "").strip(),
+        "grade": grade,
+        "source": "ai",
+        "tags": [{"dimension": dim, "subdimension": subdim, "tag": tag, "primary": True}],
+    }
+    q["id"] = exam.save_question(q)
+    return q
+
+
+@app.get("/practice/next")
+def practice_next(exclude_id: Optional[str] = None, generate: bool = False):
+    """One practice problem for the core tutoring UI.
+
+    Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB:
+      • default      → a random question from the existing bank
+      • ?generate=1  → generate a fresh AI question (gateway up), else the bank
+    An empty bank is auto-seeded with template questions, so the UI always works
+    even offline. Replaces the old /problems/random (OpenTDB) data path.
+    """
+    if generate:                       # opt-in AI generation, bank as fallback
+        q = _ai_one_question()
+        if q is not None:
+            return {**_bank_to_card(q), "generated": True}
+
+    q = exam.random_question(exclude_id=exclude_id)
+    if q is None:                      # empty bank → seed templates, then serve
+        exam.seed_templates()
+        q = exam.random_question(exclude_id=exclude_id)
+    if q is None:
+        raise HTTPException(status_code=503, detail="题库为空且无法生成题目")
+    return {**_bank_to_card(q), "generated": False}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  API ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════

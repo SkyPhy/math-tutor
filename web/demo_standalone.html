@@ -97,7 +97,8 @@
         .problem-meta {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .problem-topic,
@@ -115,6 +116,25 @@
             border: 1px solid rgba(56, 189, 248, 0.25);
             color: var(--accent-blue);
         }
+
+        /* Neutral default so non-easy/medium/hard labels (e.g. 练习) still read well. */
+        .problem-difficulty {
+            background: rgba(148, 163, 184, 0.12);
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            color: #cbd5e1;
+        }
+
+        /* Practice-feed chips: where the question came from + its tags. */
+        .problem-source {
+            font-size: 0.72rem; padding: 4px 11px; border-radius: 20px; font-weight: 600;
+            background: rgba(129, 140, 248, 0.15); border: 1px solid rgba(129, 140, 248, 0.3); color: #c7d2fe;
+        }
+        .problem-tag {
+            font-size: 0.72rem; padding: 3px 10px; border-radius: 20px;
+            background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); color: #bae6fd;
+        }
+        .problem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .problem-actions button:disabled { opacity: 0.55; cursor: progress; }
 
         .difficulty-easy {
             background: rgba(52, 211, 153, 0.1);
@@ -911,7 +931,7 @@
 <body>
 
     <h1>AI Math Tutor</h1>
-    <div class="subtitle">Experience Socratic learning powered by symbolic reasoning.</div>
+    <div class="subtitle">苏格拉底式数学辅导 · 引导而非直接给答案，正确性由多路共识保障</div>
 
     <div id="loading" class="loading-msg">Initializing Drawing Engine...</div>
 
@@ -920,12 +940,15 @@
         <div id="problem-card" class="problem-card">
             <div class="problem-card-top">
                 <div id="problem-meta" class="problem-meta"></div>
-                <button class="btn-secondary problem-refresh" onclick="loadProblem()">🎲 New Problem</button>
+                <div class="problem-actions">
+                    <button class="btn-secondary problem-refresh" onclick="loadProblem()" title="从题库换一道题">🎲 换一题</button>
+                    <button class="btn-secondary" id="ai-gen-btn" onclick="loadProblem(true)" title="让 AI 现场出一道新题">✨ AI 出题</button>
+                </div>
             </div>
-            <h2 id="problem-title" class="problem-title">Loading a problem…</h2>
+            <h2 id="problem-title" class="problem-title">正在加载题目…</h2>
             <p id="problem-statement" class="problem-statement"></p>
             <div id="problem-latex" class="problem-latex"></div>
-            <p class="problem-hint-line">✍️ Work it out on the whiteboard or solve with voice / text below.</p>
+            <p class="problem-hint-line">✍️ 在白板上作答，或在下方用语音 / 文字解题。</p>
         </div>
 
         <!-- Whiteboard + "Solve with Voice or Text" — below the problem -->
@@ -2330,41 +2353,69 @@
         // ── Random problem loader ────────────────────────────────────────
         let currentProblemId = null;
 
-        async function loadProblem() {
+        // HTML-escape helper (statements/tags come from the bank or AI).
+        function escapeHtmlText(s) {
+            return (s || '').replace(/[&<>"']/g, c =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        // Pull the next practice problem from OUR bank (exams.db) via /practice/next.
+        //   loadProblem()       → a random bank question (auto-seeded if empty)
+        //   loadProblem(true)   → ask the AI to generate a fresh one
+        // Replaces the old /problems/random (external OpenTDB) data path.
+        async function loadProblem(generate = false) {
             const titleEl = document.getElementById('problem-title');
             const metaEl = document.getElementById('problem-meta');
             const statementEl = document.getElementById('problem-statement');
             const latexEl = document.getElementById('problem-latex');
+            const aiBtn = document.getElementById('ai-gen-btn');
+            const refreshBtn = document.querySelector('.problem-refresh');
 
-            titleEl.textContent = 'Loading a problem…';
+            titleEl.textContent = generate ? 'AI 正在出题…' : '正在加载题目…';
             metaEl.innerHTML = '';
             statementEl.textContent = '';
             latexEl.textContent = '';
+            if (aiBtn) { aiBtn.disabled = true; aiBtn.textContent = generate ? '✨ 生成中…' : '✨ AI 出题'; }
+            if (refreshBtn) refreshBtn.disabled = true;
 
             try {
-                const url = new URL('http://localhost:8000/problems/random');
+                const url = new URL('http://localhost:8000/practice/next');
                 if (currentProblemId) url.searchParams.set('exclude_id', currentProblemId);
+                if (generate) url.searchParams.set('generate', '1');
 
                 const response = await fetch(url);
+                if (!response.ok) throw new Error('HTTP ' + response.status);
                 const p = await response.json();
                 currentProblemId = p.id;
+                currentExpression = '';
 
                 const diffClass = 'difficulty-' + (p.difficulty || '').toLowerCase();
+                const tagChips = (p.tags || [])
+                    .map(t => `<span class="problem-tag">${escapeHtmlText(t.tag)}</span>`).join('');
+                const srcChip = p.generated
+                    ? '<span class="problem-source">✨ AI 新题</span>'
+                    : (p.source === 'ai' ? '<span class="problem-source">AI 题库</span>' : '');
                 metaEl.innerHTML =
-                    `<span class="problem-topic">${p.topic}</span>` +
-                    `<span class="problem-difficulty ${diffClass}">${p.difficulty}</span>`;
+                    `<span class="problem-topic">${escapeHtmlText(p.topic)}</span>` +
+                    `<span class="problem-difficulty ${diffClass}">${escapeHtmlText(p.difficulty)}</span>` +
+                    srcChip + tagChips;
                 titleEl.textContent = p.title;
                 statementEl.textContent = p.statement;
-                latexEl.innerHTML = `\\[ ${p.latex} \\]`;
+                latexEl.innerHTML = p.latex ? `\\[ ${p.latex} \\]` : '';
 
-                // Render the LaTeX
+                // Fresh board for each new problem.
+                if (typeof clearCanvas === 'function') clearCanvas();
+
                 if (window.MathJax && MathJax.typesetPromise) {
                     MathJax.typesetPromise([latexEl]).catch((err) => console.log(err));
                 }
             } catch (error) {
-                titleEl.textContent = 'Could not load a problem';
+                titleEl.textContent = '题目加载失败';
                 statementEl.innerHTML =
-                    '<span style="color:#ef4444;">Make sure the backend is running on port 8000, then click “New Problem”.</span>';
+                    '<span style="color:#ef4444;">请确认后端已在 8000 端口运行，然后点「🎲 换一题」。</span>';
+            } finally {
+                if (aiBtn) { aiBtn.disabled = false; aiBtn.textContent = '✨ AI 出题'; }
+                if (refreshBtn) refreshBtn.disabled = false;
             }
         }
 
@@ -2389,8 +2440,8 @@
 
         function buildExamNav() {
             const top = document.querySelector('.problem-card-top');
-            const refresh = document.querySelector('.problem-refresh');
-            if (refresh) refresh.style.display = 'none';   // hide "🎲 New Problem"
+            const actions = document.querySelector('.problem-actions');
+            if (actions) actions.style.display = 'none';   // hide "🎲 换一题 / ✨ AI 出题"
             if (top && !document.getElementById('exam-nav')) {
                 const nav = document.createElement('div');
                 nav.id = 'exam-nav';
