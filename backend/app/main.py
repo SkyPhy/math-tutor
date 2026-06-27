@@ -131,8 +131,10 @@ def _warmup_ocr() -> None:
     # run only — never re-seed, so AI/user adds and deletes survive restarts.
     tags.init_db()
     seeded = tags.seed_from_catalogues()
+    adv = tags.seed_advanced_knowledge()   # ensure K-12+ domains exist (idempotent)
     print(f"[startup] Tag store ready ({tags.count()} active tags"
-          + (f", seeded {seeded}" if seeded else "") + ").")
+          + (f", seeded {seeded}" if seeded else "")
+          + (f", +{adv} advanced" if adv else "") + ").")
     # Logic-flaw diagnosis tables (student outcomes + AI-self consensus signals).
     diagnosis.init_db()
     print("[startup] Diagnosis DB ready.")
@@ -1422,21 +1424,24 @@ def _ai_one_question(grade: Optional[int] = None,
     system = prompts.build_tagged_generation_prompt(
         k_names, l_tags, exam.DIFFICULTY_LEVELS,
         focus_logic=focus_logic, target_difficulty=target_difficulty)
-    try:
-        text = claude_service.complete(
-            system=system,
-            messages=[{"role": "user", "content": "请出 1 道题并按要求打标签，只输出 JSON 数组。"}],
-            session_id="practice-gen", max_tokens=1500, temperature=0.7,
-        )
-    except ClaudeError:
+    item = None
+    for attempt in range(3):           # retry transient gateway / parse misses
+        try:
+            text = claude_service.complete(
+                system=system,
+                messages=[{"role": "user", "content": "请出 1 道题并按要求打标签，只输出 JSON 数组。"}],
+                session_id="practice-gen", max_tokens=2000,
+                temperature=0.7 + 0.1 * attempt,
+            )
+        except ClaudeError:
+            return None
+        arr = _parse_json_array(text)
+        if arr and isinstance(arr[0], dict) and (arr[0].get("statement") or "").strip():
+            item = arr[0]
+            break
+    if item is None:
         return None
-    arr = _parse_json_array(text)
-    if not arr or not isinstance(arr[0], dict):
-        return None
-    item = arr[0]
     statement = (item.get("statement") or "").strip()
-    if not statement:
-        return None
 
     known_k, known_l = set(k_names), {t["name"] for t in l_tags}
 
@@ -1746,8 +1751,30 @@ def get_next_hint(request: MathRequest):
 #  EXAM — AI-generated question bank covering all knowledge points
 #  ═══════════════════════════════════════════════════════════════════════
 
+# Valid JSON string escapes; any other backslash (common in raw LaTeX like
+# \times, \quad, \frac) is illegal JSON and makes json.loads throw — which used
+# to silently drop perfectly good (often the HARDEST) generated questions.
+_VALID_JSON_ESCAPE = set('"\\/bfnrtu')
+
+
+def _repair_json_backslashes(t: str) -> str:
+    """Double any backslash that isn't a valid JSON escape, so LaTeX-laden model
+    output (\\times, \\quad, \\frac …) parses instead of being discarded."""
+    out = []
+    i, n = 0, len(t)
+    while i < n:
+        c = t[i]
+        if c == "\\" and i + 1 < n and t[i + 1] not in _VALID_JSON_ESCAPE:
+            out.append("\\\\")          # lone backslash → escaped backslash
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _parse_json_array(text: str):
-    """Pull a JSON array out of a model response (tolerate fences / prose)."""
+    """Pull a JSON array out of a model response (tolerate fences / prose / raw
+    LaTeX backslashes)."""
     if not text:
         return None
     t = text.strip()
@@ -1758,6 +1785,11 @@ def _parse_json_array(text: str):
         t = t[start:end + 1]
     try:
         data = _json.loads(t)
+        return data if isinstance(data, list) else None
+    except Exception:
+        pass
+    try:                                # retry after repairing invalid escapes
+        data = _json.loads(_repair_json_backslashes(t))
         return data if isinstance(data, list) else None
     except Exception:
         return None

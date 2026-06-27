@@ -184,6 +184,32 @@ def catalogue(include_inactive: bool = False) -> Dict[str, Dict[str, List[Dict[s
     return out
 
 
+# Secondary / high-school knowledge domains. The elementary lesson/README seed
+# alone boxed generated questions into 小学 level; these let generation span K-12+
+# (平面几何 / 解析几何 / 概率 / 统计 / 三角 / 函数 / 集合 …).
+ADVANCED_KNOWLEDGE: Dict[str, List[str]] = {
+    "初中": ["平面几何", "相似与全等", "勾股定理", "一次函数", "二次函数",
+             "反比例函数", "方程与方程组", "不等式", "概率初步", "统计与数据分析"],
+    "高中": ["集合", "函数与映射", "三角函数", "数列", "不等式（高中）",
+             "平面向量", "解析几何", "立体几何", "概率", "统计",
+             "排列组合与二项式", "导数初步", "复数初步"],
+}
+
+
+def seed_advanced_knowledge() -> int:
+    """Idempotently ensure secondary/high-school knowledge tags exist so
+    generation can span beyond the elementary seed. Only ADDS tags that are
+    wholly absent — a tag the user/AI deleted is NOT resurrected. Safe to call
+    on every startup. Returns the number newly added."""
+    n = 0
+    for stage, names in ADVANCED_KNOWLEDGE.items():
+        for name in names:
+            if not get_tag(name):           # absent entirely → add; respects deletes
+                add_tag(name, KIND_KNOWLEDGE, parent=stage, source="seed")
+                n += 1
+    return n
+
+
 def seed_from_catalogues() -> int:
     """One-time seed from exam.py's hard-coded catalogues, so a fresh DB starts
     with today's vocabulary. No-op once any tag exists (so user/AI edits — adds
