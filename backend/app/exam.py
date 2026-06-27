@@ -76,6 +76,93 @@ def tag_subdimension(tag: str) -> Optional[str]:
     return None
 
 
+# ── v2.0 core differentiator: logic-thinking-type taxonomy ──────────────────
+#   ORTHOGONAL to the knowledge-point CATALOGUE above. A question carries BOTH
+#   its knowledge tags AND logic-type tags + a difficulty rung. The same logic
+#   type (e.g. 逆向倒推) can appear on any knowledge point. Design + rationale +
+#   the student logic-flaw each tag diagnoses: see docs/LOGIC_TAXONOMY.md.
+#   NOTE: DRAFT taxonomy — the categories are a product decision, refine freely.
+#   This block is purely ADDITIVE: nothing below the knowledge-point flow calls
+#   it yet (generation/diagnosis wiring is a later, reviewed step).
+DIM_LOGIC = "逻辑思维类型"
+
+# Reasoning-depth ladder (0–9), INDEPENDENT of grade/knowledge point. Anchor
+# names are a guide, not a hard grade binding — any logic type can be posed at
+# any rung. Distinct from questions.grade (年级归属) — this is 思维难度.
+DIFFICULTY_LEVELS: Dict[int, str] = {
+    0: "启蒙（幼儿园）· 直观单步、具体实物",
+    1: "低年级 I · 单步、20 以内",
+    2: "低年级 II · 单步百以内 / 简单两步",
+    3: "中年级 I · 两步、引入解题策略",
+    4: "中年级 II · 多步、需选择策略",
+    5: "高年级 I · 分数/比例、抽象关系",
+    6: "高年级 II · 多步多策略组合",
+    7: "初中过渡 · 代数化、形式化推理",
+    8: "高中 / 竞赛初步 · 多策略嵌套",
+    9: "大学通识 / 奥赛 · 抽象建模、严密论证",
+}
+
+#   family (subdimension) → [ {tag, move, flaw} ]
+#     move = 这类题在练的思维动作；flaw = 学生在这类上的典型逻辑缺陷（诊断信号）
+LOGIC_CATALOGUE: Dict[str, List[Dict[str, str]]] = {
+    "推理模式": [
+        {"tag": "归纳推理", "move": "从特例发现规律并推广到一般", "flaw": "只盯个例不会概括；据少数例错误归纳"},
+        {"tag": "演绎推理", "move": "由已知条件按规则逐步推出结论", "flaw": "跳步、漏用条件、因果倒置"},
+        {"tag": "类比迁移", "move": "把新问题映射到已掌握的模型", "flaw": "迁移错位；想不起可联系的旧知"},
+    ],
+    "策略与转化": [
+        {"tag": "逆向倒推", "move": "从结果反向还原每一步", "flaw": "只会顺推、不会用逆运算还原"},
+        {"tag": "假设调整", "move": "先假设一种情形再按差异修正（鸡兔同笼）", "flaw": "不会设假设；不会按差量调整"},
+        {"tag": "化归转化", "move": "化繁为简、化未知为已知", "flaw": "被表象困住，找不到等价的简单形式"},
+        {"tag": "整体思想", "move": "把一组量作为整体处理而非逐个", "flaw": "纠缠局部、看不到整体关系"},
+    ],
+    "结构化枚举": [
+        {"tag": "分类讨论", "move": "按互斥且穷尽的标准分情况", "flaw": "漏情况、重复；分类标准混乱"},
+        {"tag": "有序枚举", "move": "有序、不重不漏地列出所有可能", "flaw": "无序乱列、漏数或重数"},
+    ],
+    "表征建图": [
+        {"tag": "数形结合", "move": "用线段图/示意图表征数量关系", "flaw": "不会画图、读不懂图；图意与题意不符"},
+        {"tag": "列表对应", "move": "用表格/一一对应整理信息", "flaw": "信息散乱、对应错位"},
+    ],
+    "建模与估计": [
+        {"tag": "方程建模", "move": "设未知数、列等量关系求解", "flaw": "不会设元；等量关系列错"},
+        {"tag": "估算逼近", "move": "用上下界/近似判断结果合理性", "flaw": "缺数感；不检验结果是否合理"},
+    ],
+}
+
+
+def all_logic_tags() -> List[Dict[str, str]]:
+    """Flat list of every logic-type tag with its family + move + flaw."""
+    out = []
+    for family, items in LOGIC_CATALOGUE.items():
+        for it in items:
+            out.append({"dimension": DIM_LOGIC, "family": family,
+                        "tag": it["tag"], "move": it["move"], "flaw": it["flaw"]})
+    return out
+
+
+def logic_tag_family(tag: str) -> Optional[str]:
+    for family, items in LOGIC_CATALOGUE.items():
+        if any(it["tag"] == tag for it in items):
+            return family
+    return None
+
+
+def logic_tag_info(tag: str) -> Optional[Dict[str, str]]:
+    """Family + thinking-move + diagnosed logic-flaw for one logic-type tag."""
+    for family, items in LOGIC_CATALOGUE.items():
+        for it in items:
+            if it["tag"] == tag:
+                return {"dimension": DIM_LOGIC, "family": family,
+                        "tag": tag, "move": it["move"], "flaw": it["flaw"]}
+    return None
+
+
+def difficulty_label(level: int) -> str:
+    """Anchor description for a 0–9 difficulty rung ('' if out of range)."""
+    return DIFFICULTY_LEVELS.get(level, "")
+
+
 # ── Template question bank (deterministic fallback, one per tag) ───────────
 # Guarantees full coverage instantly when the AI is slow/unavailable.
 # tag -> (statement, latex, answer)
