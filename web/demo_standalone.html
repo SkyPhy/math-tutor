@@ -135,6 +135,21 @@
         }
         .problem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
         .problem-actions button:disabled { opacity: 0.55; cursor: progress; }
+        /* Logic-thinking-type chips stand out from knowledge-point chips. */
+        .problem-tag.logic {
+            background: rgba(167, 139, 250, 0.15); border-color: rgba(167, 139, 250, 0.4);
+            color: #ddd6fe; font-weight: 600;
+        }
+        /* Targeted-practice controls: pick a logic type + difficulty, then generate. */
+        .practice-controls {
+            display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+            margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--glass-border);
+        }
+        .pc-label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+        .pc-select {
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--glass-border);
+            color: #e5e7eb; border-radius: 8px; padding: 5px 9px; font-size: 0.85rem;
+        }
 
         .difficulty-easy {
             background: rgba(52, 211, 153, 0.1);
@@ -949,6 +964,16 @@
             <p id="problem-statement" class="problem-statement"></p>
             <div id="problem-latex" class="problem-latex"></div>
             <p class="problem-hint-line">✍️ 在白板上作答，或在下方用语音 / 文字解题。</p>
+            <!-- Targeted practice: pick a logic-thinking type + difficulty, generate one. -->
+            <div class="practice-controls" id="practice-controls">
+                <label class="pc-label">🧠 思维类型
+                    <select id="focus-logic-select" class="pc-select"><option value="">不限</option></select>
+                </label>
+                <label class="pc-label">难度
+                    <select id="difficulty-select" class="pc-select"><option value="">不限</option></select>
+                </label>
+                <button class="btn-secondary" onclick="generateFocused()" title="按所选思维类型 / 难度让 AI 出题">🎯 按要求出题</button>
+            </div>
         </div>
 
         <!-- Whiteboard + "Solve with Voice or Text" — below the problem -->
@@ -2360,28 +2385,34 @@
         }
 
         // Pull the next practice problem from OUR bank (exams.db) via /practice/next.
-        //   loadProblem()       → a random bank question (auto-seeded if empty)
-        //   loadProblem(true)   → ask the AI to generate a fresh one
+        //   loadProblem()                  → a random bank question (auto-seeded if empty)
+        //   loadProblem(true)              → ask the AI to generate a fresh one
+        //   loadProblem(true, '逆向倒推', 4) → generate one TRAINING that logic type at difficulty 4
         // Replaces the old /problems/random (external OpenTDB) data path.
-        async function loadProblem(generate = false) {
+        async function loadProblem(generate = false, focusLogic = null, difficulty = null) {
             const titleEl = document.getElementById('problem-title');
             const metaEl = document.getElementById('problem-meta');
             const statementEl = document.getElementById('problem-statement');
             const latexEl = document.getElementById('problem-latex');
             const aiBtn = document.getElementById('ai-gen-btn');
             const refreshBtn = document.querySelector('.problem-refresh');
+            const isGen = generate || focusLogic || difficulty;
 
-            titleEl.textContent = generate ? 'AI 正在出题…' : '正在加载题目…';
+            titleEl.textContent = isGen
+                ? (focusLogic ? `AI 正在出题（训练「${focusLogic}」）…` : 'AI 正在出题…')
+                : '正在加载题目…';
             metaEl.innerHTML = '';
             statementEl.textContent = '';
             latexEl.textContent = '';
-            if (aiBtn) { aiBtn.disabled = true; aiBtn.textContent = generate ? '✨ 生成中…' : '✨ AI 出题'; }
+            if (aiBtn) { aiBtn.disabled = true; aiBtn.textContent = isGen ? '✨ 生成中…' : '✨ AI 出题'; }
             if (refreshBtn) refreshBtn.disabled = true;
 
             try {
                 const url = new URL('http://localhost:8000/practice/next');
                 if (currentProblemId) url.searchParams.set('exclude_id', currentProblemId);
                 if (generate) url.searchParams.set('generate', '1');
+                if (focusLogic) url.searchParams.set('focus_logic', focusLogic);
+                if (difficulty) url.searchParams.set('difficulty', difficulty);
 
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -2390,8 +2421,12 @@
                 currentExpression = '';
 
                 const diffClass = 'difficulty-' + (p.difficulty || '').toLowerCase();
-                const tagChips = (p.tags || [])
-                    .map(t => `<span class="problem-tag">${escapeHtmlText(t.tag)}</span>`).join('');
+                // Logic-thinking-type chips (🧠) stand apart from knowledge-point chips.
+                const tagChips = (p.tags || []).map(t => {
+                    const isLogic = t.dimension === '逻辑思维类型';
+                    return `<span class="problem-tag ${isLogic ? 'logic' : ''}">` +
+                        `${isLogic ? '🧠 ' : ''}${escapeHtmlText(t.tag)}</span>`;
+                }).join('');
                 const srcChip = p.generated
                     ? '<span class="problem-source">✨ AI 新题</span>'
                     : (p.source === 'ai' ? '<span class="problem-source">AI 题库</span>' : '');
@@ -2419,6 +2454,40 @@
             }
         }
 
+        // "🎯 按要求出题" — generate one training the selected logic type / difficulty.
+        function generateFocused() {
+            const fl = document.getElementById('focus-logic-select').value || null;
+            const dv = document.getElementById('difficulty-select').value;
+            loadProblem(true, fl, dv ? parseInt(dv, 10) : null);
+        }
+
+        // Populate the targeted-practice selects: logic types from the live tag
+        // store (/tags/catalogue) + the open-ended difficulty ladder.
+        async function initPracticeControls() {
+            const DIFF = {
+                1: '认识数字', 2: '低年级·20以内', 3: '低年级·百以内', 4: '中年级·两步',
+                5: '中年级·多步', 6: '高年级·分数比例', 7: '高年级·多策略', 8: '初中过渡',
+                9: '高中/竞赛初步', 10: '大学通识课',
+            };
+            const diffSel = document.getElementById('difficulty-select');
+            if (diffSel) {
+                for (let i = 1; i <= 10; i++) diffSel.add(new Option(`${i} · ${DIFF[i]}`, i));
+                diffSel.add(new Option('11+ · 竞赛/研究级', 12));
+            }
+            try {
+                const resp = await fetch('http://localhost:8000/tags/catalogue');
+                const data = await resp.json();
+                const logic = (data.catalogue && data.catalogue.logic) || {};
+                const sel = document.getElementById('focus-logic-select');
+                Object.keys(logic).forEach(family => {
+                    const grp = document.createElement('optgroup');
+                    grp.label = family;
+                    (logic[family] || []).forEach(t => grp.appendChild(new Option(t.name, t.name)));
+                    sel.appendChild(grp);
+                });
+            } catch (e) { /* backend offline — selector just stays "不限" */ }
+        }
+
         // ── Exam mode ─────────────────────────────────────────────────────
         // Launched from demo_exam.html's "Start the Exam". Presents the AI-
         // generated questions one page at a time in THIS same problem-card +
@@ -2442,6 +2511,8 @@
             const top = document.querySelector('.problem-card-top');
             const actions = document.querySelector('.problem-actions');
             if (actions) actions.style.display = 'none';   // hide "🎲 换一题 / ✨ AI 出题"
+            const pc = document.getElementById('practice-controls');
+            if (pc) pc.style.display = 'none';             // hide targeted-practice controls in exam mode
             if (top && !document.getElementById('exam-nav')) {
                 const nav = document.createElement('div');
                 nav.id = 'exam-nav';
@@ -2545,7 +2616,8 @@
         if (new URLSearchParams(location.search).get('exam') === '1' && initExamMode()) {
             // initExamMode rendered the first question.
         } else {
-            loadProblem();    // normal flow — fetch the first random problem
+            initPracticeControls();   // populate logic-type + difficulty selectors
+            loadProblem();            // normal flow — fetch the first random problem
         }
     </script>
 </body>

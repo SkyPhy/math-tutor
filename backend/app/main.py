@@ -1404,13 +1404,15 @@ def _question_tag_row(name: str, primary: bool = False) -> Dict[str, Any]:
 
 
 def _ai_one_question(grade: Optional[int] = None,
-                     focus_logic: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                     focus_logic: Optional[str] = None,
+                     target_difficulty: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Generate ONE question AND tag it from the LIVE vocabulary (tags.db) via
     Claude. Existing tags are reused (usage bumped); any tag the model proposes
     when nothing fits is ADDED to the store (the self-evolving loop, source='ai').
     Saves the question with its logic + knowledge tags and an open-ended difficulty.
-    `focus_logic` (a weak logic type from diagnosis) biases the question to TRAIN
-    it. Returns the saved bank-question dict, or None on failure / gateway down."""
+    `focus_logic` (a weak logic type from diagnosis / user) biases the question to
+    TRAIN it; `target_difficulty` requests a difficulty rung. Returns the saved
+    bank-question dict, or None on failure / gateway down."""
     if not claude_service.available():
         return None
     k_names = [t["name"] for t in tags.list_tags(kind=tags.KIND_KNOWLEDGE)]
@@ -1418,7 +1420,8 @@ def _ai_one_question(grade: Optional[int] = None,
                "flaw": (t.get("meta") or {}).get("flaw")}
               for t in tags.list_tags(kind=tags.KIND_LOGIC)]
     system = prompts.build_tagged_generation_prompt(
-        k_names, l_tags, exam.DIFFICULTY_LEVELS, focus_logic=focus_logic)
+        k_names, l_tags, exam.DIFFICULTY_LEVELS,
+        focus_logic=focus_logic, target_difficulty=target_difficulty)
     try:
         text = claude_service.complete(
             system=system,
@@ -1493,13 +1496,15 @@ def _ai_one_question(grade: Optional[int] = None,
 
 @app.get("/practice/next")
 def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
-                  focus_logic: Optional[str] = None, adaptive: Optional[str] = None):
+                  focus_logic: Optional[str] = None, difficulty: Optional[int] = None,
+                  adaptive: Optional[str] = None):
     """One practice problem for the core tutoring UI.
 
     Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB:
       • default          → a random question from the existing bank
       • ?generate=1      → generate a fresh AI question (gateway up), else the bank
       • ?focus_logic=X   → generate one that TRAINS logic type X
+      • ?difficulty=N    → generate one at about difficulty N (open-ended)
       • ?adaptive=<sid>  → generate one targeting THIS session's weakest logic type
                            (from diagnosis); generation is implied
     An empty bank is auto-seeded with template questions, so the UI always works
@@ -1509,13 +1514,14 @@ def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
     if adaptive and not focus_logic:
         weak = diagnosis.weak_logic_tags(adaptive, limit=1)
         focus_logic = weak[0] if weak else None
-    if adaptive or focus_logic:
+    if adaptive or focus_logic or difficulty is not None:
         generate = True
 
     if generate:                       # opt-in AI generation, bank as fallback
-        q = _ai_one_question(focus_logic=focus_logic)
+        q = _ai_one_question(focus_logic=focus_logic, target_difficulty=difficulty)
         if q is not None:
-            return {**_bank_to_card(q), "generated": True, "focus_logic": focus_logic}
+            return {**_bank_to_card(q), "generated": True,
+                    "focus_logic": focus_logic, "target_difficulty": difficulty}
 
     q = exam.random_question(exclude_id=exclude_id)
     if q is None:                      # empty bank → seed templates, then serve

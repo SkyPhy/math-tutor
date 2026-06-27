@@ -190,15 +190,17 @@ def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
 def build_tagged_generation_prompt(knowledge_tags: List[str],
                                    logic_tags: List[Dict[str, str]],
                                    difficulty_levels: Dict[int, str],
-                                   focus_logic: Optional[str] = None) -> str:
+                                   focus_logic: Optional[str] = None,
+                                   target_difficulty: Optional[int] = None) -> str:
     """System prompt to generate ONE question AND tag it from the LIVE, dynamic
     vocabulary (tags.db). The model picks existing tags where they fit, and —
     crucially — may PROPOSE NEW tags when none fit (the self-evolving loop): the
-    backend adds those to the store. Also assigns a 0–9 difficulty.
+    backend adds those to the store. Also assigns an open-ended difficulty.
 
-    `focus_logic`, when given, is a weak logic type the question should TRAIN
-    (adaptive targeting from diagnosis). `logic_tags` items: {name, move, flaw}.
-    Returns a strict one-element JSON array."""
+    `focus_logic`, when given, is a logic type the question should TRAIN (adaptive
+    targeting / user focus). `target_difficulty`, when given, is the requested
+    difficulty rung. `logic_tags` items: {name, move, flaw}. Returns a strict
+    one-element JSON array."""
     kb = "、".join(knowledge_tags) if knowledge_tags else "（暂无）"
     lb = "\n".join(
         f'  - 「{t["name"]}」：{t.get("move") or ""}'
@@ -210,8 +212,13 @@ def build_tagged_generation_prompt(knowledge_tags: List[str],
         f"\n【重点训练】这道题应主要训练「{focus_logic}」这一逻辑思维类型（学生在此较弱），"
         f"请确保它是首要 logic 标签。\n" if focus_logic else ""
     )
+    target_line = (
+        f"\n【目标难度】请把难度控制在约 {target_difficulty} 档"
+        f"（{difficulty_levels.get(target_difficulty, '更高档，可超过 10')}），"
+        f"输出的 difficulty 应接近它（可结合思维难度微调）。\n" if target_difficulty else ""
+    )
 
-    return f"""你是一位小学数学命题老师。请出 **1 道**适合小学生的中文题，并为它打标签。{focus_line}
+    return f"""你是一位小学数学命题老师。请出 **1 道**适合小学生的中文题，并为它打标签。{focus_line}{target_line}
 
 【可用「知识点」标签】（按内容选，挑 0–2 个最贴切的，原样照抄）：
 {kb}
