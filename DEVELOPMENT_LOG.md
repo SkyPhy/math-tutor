@@ -107,7 +107,13 @@
   全过；`x+2=5→3` 走 `sympy-fallback` 判对、`→9` 判错、二次方程 `2,3` 判对、应用题无网关返回"未判定"、
   空答案守卫。**✅ 真链路多路共识已验收（2026-06-27 密钥到位后）**：应用题 3/3 共识、`grade` 判对/判错均
   `consensus(3/3)`、两管注水题 4/4 共识得分数 `24/5`、`POST /verify` 真 HTTP 确经 `judged_by=consensus`
-  非 SymPy 兜底（详见 `docs/DEVELOPMENT_PLAN.md` §4 验收）。第 3 步（`NeuroSymbolicEngine` 迁 `legacy/`）尚未做。
+  非 SymPy 兜底（详见 `docs/DEVELOPMENT_PLAN.md` §4 验收）。
+- **第 3 步·判分部分（2026-06-27）✅**：判分用的 SymPy（`_sympy_grade`+`_compare_answer`）从 `main.py`
+  移入新建 `backend/app/legacy/sympy_grader.py`（`app.legacy` 包），作**明确标注的非权威离线兜底**；
+  `_check_student_answer` 经依赖注入调用（把 `NeuroSymbolicEngine.solve_with_steps` 当 `solver` 传入，
+  避免循环导入）。主判分路径在 `main.py` 内**已无 SymPy 判分代码**。验证：离线复跑兜底 5 例无回归 +
+  归一器 44 例全过 + 真 HTTP `/verify` 仍 `judged_by=consensus(3/3)`。**渲染引擎 `NeuroSymbolicEngine`
+  仍留 `main.py`**（`/analyze`·`/hint`·`/animate`·`/plot` 的 latex/分类/步骤，非正确性用途），整体退役留待渲染侧一并迁移。
 - **归一器加固（2026-06-27，离线可验，无网关依赖）**：用回归脚本"跑起来看"暴露并修复两处会导致**误判**
   的缺陷——① 千位分隔符：`1,000`/`12,345` 旧逻辑被当作集合 `{1,0}`/`{12,345}` 拆开，永不等于 `1000`；
   现按"逗号后恰好 3 位数字"识别为同一数的千位分组并剥除（`_strip_thousands`），而 `2, 3`/`2,3` 仍判为集合。

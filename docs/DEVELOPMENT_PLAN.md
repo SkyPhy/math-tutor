@@ -142,11 +142,17 @@ Math Solver"）。本计划做三件事：
      `agreement`、`votes_label`。SymPy 仅在共识不可用/分歧时作**兜底**（`sympy-fallback`）。原
      单次 `claude+sympy` 判分簇（`_claude_grade`/`_eval_closed_form`/`build_grade_prompt`）**已删除**。
      `/analyze`·`/hint` 暂未切换（它们生成提示而非判分，Claude 已可自行运算，留待第 3 步统一处理）。
-  3. **☐ 移除 SymPy 主链路**：把 `NeuroSymbolicEngine` 求解/判分从主路径摘除，迁到 `backend/legacy/`
-     仅作离线对照（短期可留一个**只读**的分歧统计，用真实数据确认替换无回归后即移除）。
+  3. **🟡 移除 SymPy 主链路（判分部分已落地 2026-06-27）**：
+     - **✅ 3a 判分 SymPy 退役到 `app/legacy/`**：原 `_sympy_grade` + `_compare_answer` 已从 `main.py`
+       移入 `backend/app/legacy/sympy_grader.py`（新建 `app.legacy` 包），成为**明确标注的非权威离线兜底**。
+       `_check_student_answer` 经依赖注入（把 `NeuroSymbolicEngine.solve_with_steps` 作为 `solver` 传入）
+       调用它，避免回指 `main` 的循环导入。**主判分路径不再于 `main.py` 内含 SymPy 判分代码**——共识为唯一
+       事实来源，SymPy 仅在网关不可用/分歧时兜底（行为不变，已离线 + 真 HTTP 验收无回归）。
+     - **☐ 3b 渲染引擎 `NeuroSymbolicEngine` 暂留 `main.py`**：仍为 `/analyze`·`/hint`·`/animate`·`/plot`
+       提供 latex/分类/步骤渲染（**非正确性用途**），整体迁 `app/legacy/` 属更大改动，留待渲染侧一并迁移。
 - **交付物**：✅ `reasoner.py`（多路推理 + 共识 + 择简）、✅ `prompts.build_solve_prompt`（每路输出
-  "答案 + 步骤 + 自评置信度"）、✅ `/verify` 暴露 `agreement`/`votes_label`；☐ `NeuroSymbolicEngine`
-  退役到 `legacy/`。
+  "答案 + 步骤 + 自评置信度"）、✅ `/verify` 暴露 `agreement`/`votes_label`；✅ 判分 SymPy 退役到
+  `app/legacy/sympy_grader.py`（依赖注入、无循环导入）；☐ 渲染引擎 `NeuroSymbolicEngine` 整体退役。
 - **验收（运行观测）**：同一应用题，多路推理收敛到 1 个正解并附"为何最简"理由；改高难度题能看到
   "分歧→再推理→收敛"；主链路不再调用 SymPy。**注意：真实验证需 `.env`/网关在位**（多路调用，
   注意 §5 网关并发/缓存约束）。

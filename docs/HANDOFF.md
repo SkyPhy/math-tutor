@@ -35,7 +35,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 一个小学数学（义务教育课标）AI 辅导 + 出题 + 考试系统，核心原则：
 
-1. **判分以"多路共识"为正解来源（去 SymPy，2026-06-27 落地第 1-2 步）**：判分不再依赖 CAS，而是让 **Claude 对同一题独立求解多路**（不同视角 + temperature 抖动，见 `backend/app/reasoner.py` 的 `_ANGLES`/`_TEMPS`），**多数路一致的答案**即正解；答案比较用推理器**自带的去 SymPy 数值归一器**（`fractions`+`ast`，`1/2`=`0.5`=`50%`、集合无序、带单位也能比）。`/verify` 判分走 `reasoner_engine.grade`，返回 `judged_by="consensus(k/n)"`、`agreement`、`ground_truth`（共识答案）。**✅ 真链路已验收（2026-06-27，密钥到位后）**：`POST /verify` 真 HTTP 对 `2x+4=10` 答 `3`→`answer_correct=True`、答 `4`→`False`，`judged_by=consensus`、`votes_label=consensus(3/3)`，确经多路共识而非 SymPy 兜底（详见 `DEVELOPMENT_PLAN.md` §4 验收）。**SymPy 已降为兜底**：仅当网关不可用或多路不一致时，用它对可解代数做非权威交叉校验（`judged_by="sympy-fallback"`）；判不出就返回"未判定"（`correct=null`），绝不瞎猜。原单次 `claude+sympy` 判分簇（`_claude_grade`/`_eval_closed_form`/`build_grade_prompt`）**已删除**。原"SymPy 唯一事实来源、不得另算"的绝对约束早已废止。<br>　**仍未做（第 3 步）**：`NeuroSymbolicEngine` 尚未迁入 `legacy/`，仍为 `/analyze`·`/hint`·`/animate`·`/plot` 提供 latex/分类/步骤渲染（非正确性用途）。
+1. **判分以"多路共识"为正解来源（去 SymPy，2026-06-27 落地第 1-2 步）**：判分不再依赖 CAS，而是让 **Claude 对同一题独立求解多路**（不同视角 + temperature 抖动，见 `backend/app/reasoner.py` 的 `_ANGLES`/`_TEMPS`），**多数路一致的答案**即正解；答案比较用推理器**自带的去 SymPy 数值归一器**（`fractions`+`ast`，`1/2`=`0.5`=`50%`、集合无序、带单位也能比）。`/verify` 判分走 `reasoner_engine.grade`，返回 `judged_by="consensus(k/n)"`、`agreement`、`ground_truth`（共识答案）。**✅ 真链路已验收（2026-06-27，密钥到位后）**：`POST /verify` 真 HTTP 对 `2x+4=10` 答 `3`→`answer_correct=True`、答 `4`→`False`，`judged_by=consensus`、`votes_label=consensus(3/3)`，确经多路共识而非 SymPy 兜底（详见 `DEVELOPMENT_PLAN.md` §4 验收）。**SymPy 已降为兜底**：仅当网关不可用或多路不一致时，用它对可解代数做非权威交叉校验（`judged_by="sympy-fallback"`）；判不出就返回"未判定"（`correct=null`），绝不瞎猜。原单次 `claude+sympy` 判分簇（`_claude_grade`/`_eval_closed_form`/`build_grade_prompt`）**已删除**。原"SymPy 唯一事实来源、不得另算"的绝对约束早已废止。<br>　**✅ 第 3 步（判分部分，2026-06-27 落地）**：判分用的 SymPy（原 `_sympy_grade`+`_compare_answer`）已从 `main.py` 移入 **`backend/app/legacy/sympy_grader.py`**（新建 `app.legacy` 包），作明确标注的**非权威离线兜底**；`_check_student_answer` 经依赖注入调用（把 `NeuroSymbolicEngine.solve_with_steps` 当 `solver` 传入，避免循环导入）。主判分路径在 `main.py` 内**已无 SymPy 判分代码**；行为不变，已离线 + 真 HTTP 验收无回归。<br>　**仍未做（第 3 步渲染部分）**：渲染引擎 `NeuroSymbolicEngine` 仍留 `main.py`，为 `/analyze`·`/hint`·`/animate`·`/plot` 提供 latex/分类/步骤渲染（非正确性用途），整体迁 `app/legacy/` 留待渲染侧一并迁移。
    - **门禁已放宽**：`PolicyEngine.domain_restriction` 现接受自然语言应用题（CJK/字母/数字均算"内容"，只拦符号垃圾）；注入 token 与长度仍是硬拦截，安全不变。
    - **自然语言识别**：`NeuroSymbolicEngine.solve_with_steps` 现会识别应用题（含 CJK/`?`/解析出>3 个自由符号即判为 prose），标 `verification_status="unparseable"`、`solution=None`，避免 SymPy 把"小明有3个苹果"硬解成垃圾符号还自称 verified。
 2. **Socratic 约束不可绕过**：默认不直接给最终答案，分 5 级渐进提示。
@@ -77,6 +77,8 @@ math/
     │   ├── recognize.py            ← nex-n2-pro 视觉 OCR（urllib，含图像预处理）
     │   ├── prompts.py              ← Claude 系统提示（Socratic / 聊天 / 出题 / 多路求解 JSON）
     │   ├── reasoner.py             ← ★多路共识推理器（去 SymPy 判分的正解来源；自带数值归一器）
+    │   ├── legacy/                 ← ★退役实现（仅离线兜底，非事实来源）
+    │   │   └── sympy_grader.py     ← 退役的 SymPy 判分器（依赖注入，无循环导入；网关不可用时兜底）
     │   ├── auth.py                 ← 账户/会话（SQLite, PBKDF2, 限速）
     │   ├── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
     │   └── memory.py               ← 持久经验记忆（SQLite, 自适应难度，跨重启留存）

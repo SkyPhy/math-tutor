@@ -60,6 +60,11 @@ from .claude_service import claude_service, ClaudeError
 # and an offline fallback, never as the sole arbiter.
 from .reasoner import reasoner_engine
 
+# RETIRED SymPy correctness judge — demoted to a non-authoritative OFFLINE FALLBACK
+# (de-symbolization step 3, 2026-06-27). It is invoked only when consensus is
+# unavailable; the rendering engine (NeuroSymbolicEngine) stays in this module.
+from .legacy import sympy_grader
+
 # User accounts & sessions, backed by SQLite (auth.py / users.db).
 from . import auth
 
@@ -1826,63 +1831,6 @@ def get_policies():
     }
 
 
-def _compare_answer(correct: List[str], answer: str) -> Optional[bool]:
-    """Compare a student `answer` against known-correct value(s) (each a string).
-    Handles boolean identities and numeric/symbolic sets. None = undetermined.
-    Used by the SymPy fallback grader (`_sympy_grade`)."""
-    if not correct:
-        return None
-
-    # Identity problems whose solution is a boolean ("True"/"False").
-    if len(correct) == 1 and correct[0] in ("True", "False"):
-        got = answer.strip().lower().rstrip(".!。")
-        truthy = {"true", "yes", "correct", "成立", "对", "正确"}
-        falsy = {"false", "no", "incorrect", "不成立", "错", "错误"}
-        if got in truthy:
-            return correct[0] == "True"
-        if got in falsy:
-            return correct[0] == "False"
-        return None  # can't tell what the student meant → undetermined
-
-    # Numeric / symbolic answers: compare the SET of values the student gave
-    # against the SET of correct values. Tolerate "x = 2", "2", "2, -3" forms.
-    try:
-        correct_vals = [safe_parse(c) for c in correct]
-    except Exception:
-        return None
-
-    raw = answer.strip()
-    if "=" in raw:                       # student wrote "x = 2" → keep the value
-        raw = raw.split("=")[-1].strip()
-    candidates = [p.strip() for p in raw.split(",") if p.strip()]
-    if not candidates:
-        return None
-    try:
-        student_vals = [safe_parse(c) for c in candidates]
-    except Exception:
-        return False                     # unparseable answer → simply wrong
-
-    def _eq(a, b) -> bool:
-        try:
-            return simplify(a - b) == 0
-        except Exception:
-            return False
-
-    # Correct iff every expected value is matched AND the student added no extras.
-    all_covered = all(any(_eq(cv, sv) for sv in student_vals) for cv in correct_vals)
-    no_extras = all(any(_eq(sv, cv) for cv in correct_vals) for sv in student_vals)
-    return all_covered and no_extras
-
-
-def _sympy_grade(expression: str, answer: str) -> Optional[bool]:
-    """SymPy-only verdict: True/False where SymPy can solve & compare, else None.
-    Exact and instant — this stays the PREFERRED judge wherever it's confident."""
-    engine = NeuroSymbolicEngine.solve_with_steps(expression)
-    if engine.get("verification_status") == "error":
-        return None
-    return _compare_answer(engine.get("solution") or [], answer)
-
-
 def _check_student_answer(expression: str, answer: str, session_id: Optional[str] = None,
                           model: Optional[str] = None) -> Dict[str, Any]:
     """Grade a student's answer. Correctness now comes from CONSENSUS, not a CAS:
@@ -1913,8 +1861,12 @@ def _check_student_answer(expression: str, answer: str, session_id: Optional[str
 
     # ── Fallback: non-authoritative SymPy cross-check (offline / disagreement) ──
     # Only trusted where SymPy is confident; used because consensus was unavailable
-    # (gateway down) or the independent paths failed to agree.
-    sv = _sympy_grade(expression, answer)
+    # (gateway down) or the independent paths failed to agree. The retired SymPy
+    # grader lives in app.legacy now; we inject the rendering engine's solver so the
+    # legacy module stays free of any import back into main.
+    sv = sympy_grader.sympy_grade(
+        expression, answer, NeuroSymbolicEngine.solve_with_steps
+    )
     if sv is not None:
         return {"correct": sv, "judged_by": "sympy-fallback", "reason": None}
 
