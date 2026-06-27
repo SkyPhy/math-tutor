@@ -113,9 +113,15 @@ Math Solver"）。本计划做三件事：
 > 每阶段：**目标 → 交付物（绑定文件）→ 验收标准（可运行观测）**。
 > 遵循仓库既有习惯：每个特性都用"运行应用 + 观测真实行为"验证（headless 浏览器 / curl）。
 
-### ★ 下一首要目标 · 去符号化：全程 Claude 自主推理为正解（2026-06-26 立项）
+### ★ 下一首要目标 · 去符号化：全程 Claude 自主推理为正解（2026-06-26 立项｜2026-06-27 推进中）
 > 这是**当前最高优先级**的方向，凌驾于下方按蓝图编号的阶段之上。阶段 0–1 已完成；
 > 阶段 2+ 的蓝图工作继续有效，但**本目标先行**。
+>
+> **进度（2026-06-27）**：下方分步落地的 **第 1、2 步已落地，并已通过真链路（密钥到位）验收**——
+> 新增多路共识推理器 `backend/app/reasoner.py`，并已让 `/verify` 判分**以共识为正解来源**；SymPy 降级为
+> **离线兜底 + 非权威交叉校验**（`judged_by` = `consensus(k/n)` 或兜底 `sympy-fallback`）。
+> **第 3 步仍未做**：`NeuroSymbolicEngine` 尚未迁入 `legacy/`（它仍为 `/analyze`·`/hint`·
+> `/animate`·`/plot` 提供 latex/分类/步骤渲染，属非正确性用途，留待整体迁移）。
 
 - **目标（用户定向）**：**放弃 SymPy，换为大模型自行运算**。`/verify`、`/analyze`、`/hint` 的
   求解与判分由 **Claude 端到端自主完成**，SymPy 确定性验证从主链路**彻底移除**（代码降级为
@@ -127,19 +133,30 @@ Math Solver"）。本计划做三件事：
   同时落地**——后者是替代 CAS 的正确性来源。若只删 SymPy 而不上共识，等于把正确性押在单次生成，
   是退步。Socratic 护栏、策略门禁、优雅降级**不受影响，继续强制**。
 - **分步落地（每步可独立验收、可回退）**：
-  1. **自我迭代推理器**（`backend/app/reasoner.py`，新增）：同一题 **N 路独立生成**（temperature
-     抖动 / 不同提示视角）→ 结构化抽取每路的最终答案与步骤 → **多数共识**定答案、**最少步数/最清晰**
-     定讲解；分歧大时再生成一轮，直至收敛。
-  2. **接管判分/求解**：`/verify`、`/analyze`、`/hint` 改用 `reasoner`，输出
-     `consensus`/`candidates_considered`/`agreement`（各路一致度）。判分以共识为准。
-  3. **移除 SymPy 主链路**：把 `NeuroSymbolicEngine` 求解/判分从主路径摘除，迁到 `backend/legacy/`
+  1. **✅ 自我迭代推理器**（`backend/app/reasoner.py`，已新增）：同一题 **N 路独立生成**（temperature
+     抖动 0.2/0.6/0.9 + 不同提示视角 `_ANGLES`）→ 结构化抽取每路的最终答案与步骤 → **多数共识**定
+     答案、置信度/最简步数定讲解。答案比较用**自带的去 SymPy 数值归一器**（`fractions`+`ast`，
+     `1/2`=`0.5`=`50%`）。无网关 / 少于 2 路可解析时返回"未判定"，优雅降级。
+  2. **✅ 接管判分（`/verify`）**：`_check_student_answer` 已改为**共识优先**——`reasoner_engine.grade`
+     给出 `correct`/`agreement`/`ground_truth`；`/verify` 暴露 `judged_by`（如 `consensus(3/3)`）、
+     `agreement`、`votes_label`。SymPy 仅在共识不可用/分歧时作**兜底**（`sympy-fallback`）。原
+     单次 `claude+sympy` 判分簇（`_claude_grade`/`_eval_closed_form`/`build_grade_prompt`）**已删除**。
+     `/analyze`·`/hint` 暂未切换（它们生成提示而非判分，Claude 已可自行运算，留待第 3 步统一处理）。
+  3. **☐ 移除 SymPy 主链路**：把 `NeuroSymbolicEngine` 求解/判分从主路径摘除，迁到 `backend/legacy/`
      仅作离线对照（短期可留一个**只读**的分歧统计，用真实数据确认替换无回归后即移除）。
-- **交付物**：`reasoner.py`（多路推理 + 共识 + 择简）、`prompts.build_reason_prompt`（每路输出
-  "答案 + 步骤 + 自评简洁度"）、`/verify` 暴露 `consensus`/`agreement`、`NeuroSymbolicEngine`
+- **交付物**：✅ `reasoner.py`（多路推理 + 共识 + 择简）、✅ `prompts.build_solve_prompt`（每路输出
+  "答案 + 步骤 + 自评置信度"）、✅ `/verify` 暴露 `agreement`/`votes_label`；☐ `NeuroSymbolicEngine`
   退役到 `legacy/`。
 - **验收（运行观测）**：同一应用题，多路推理收敛到 1 个正解并附"为何最简"理由；改高难度题能看到
   "分歧→再推理→收敛"；主链路不再调用 SymPy。**注意：真实验证需 `.env`/网关在位**（多路调用，
   注意 §5 网关并发/缓存约束）。
+  - **✅ 已验收（2026-06-27，密钥到位后跑真链路）**：① 应用题"5+7"多路 **3/3 共识** 得 12；
+    ② `reasoner_engine.grade` 对算式 `3x-5=16`：学生答 `7`→`correct=True`、答 `5`→`correct=False`，
+    均 `judged_by=consensus(3/3)`、`ground_truth=7`；③ 较难的两管注水题（分数解）**4/4 共识** 得 `24/5`，
+    去 SymPy 归一器正确处理分数答案；④ **`POST /verify` 真 HTTP**（UTF-8 urllib，避开 Windows curl
+    中文乱码坑）对 `2x+4=10`：答 `3`→`answer_correct=True`、答 `4`→`False`，响应
+    `judged_by=consensus`、`votes_label=consensus(3/3)`——判分确经多路共识、**未走 SymPy 兜底**。
+    时延：3 路顺序约 10s、4 路约 25s（网关当时健康；顺序调用，未触发 §5 并发坑）。
 
 ---
 

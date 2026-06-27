@@ -5,7 +5,7 @@
 > 一句话：这是一个 **Socratic（苏格拉底式）AI 数学辅导系统**——FastAPI 后端
 > （Claude 自主推理；SymPy 确定性验证为**过渡，方向上待废止**）+ 纯静态多页前端 + 手写 OCR +
 > 账户/考试 SQLite 存储。
-> 最后更新：2026-06-26。
+> 最后更新：2026-06-27。
 >
 > **★ 方向（2026-06-26）：放弃 SymPy，换为大模型自行运算。** 求解与判分将由 Claude 端到端自主
 > 完成，SymPy 确定性验证从主链路彻底移除（正确性改靠自我迭代/多路共识）。本文描述的仍是**当前
@@ -35,7 +35,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 一个小学数学（义务教育课标）AI 辅导 + 出题 + 考试系统，核心原则：
 
-1.（待彻底废止，全程 Claude 自行推理方才为正解） **SymPy 是可信验证参考（混合裁判，2026-06-26）**：SymPy 在能解的范围内精确、廉价，**优先**采信；它覆盖不了的几何/统计/量与计量/应用题，允许 **Claude 自行推理**——但 **Claude 的算术由 SymPy 复核**：判分时 Claude 把应用题翻成一个可计算的算式 `computation`，后端用 SymPy 求值得到 ground truth 再判学生答案（`judged_by="claude+sympy"`；无可验证算式时才退回 Claude 自判 `judged_by="claude"`）。`/verify` 返回 `judged_by`/`computation`/`ground_truth`。原"SymPy 唯一事实来源、不得另算"的绝对约束已废止。
+1. **判分以"多路共识"为正解来源（去 SymPy，2026-06-27 落地第 1-2 步）**：判分不再依赖 CAS，而是让 **Claude 对同一题独立求解多路**（不同视角 + temperature 抖动，见 `backend/app/reasoner.py` 的 `_ANGLES`/`_TEMPS`），**多数路一致的答案**即正解；答案比较用推理器**自带的去 SymPy 数值归一器**（`fractions`+`ast`，`1/2`=`0.5`=`50%`、集合无序、带单位也能比）。`/verify` 判分走 `reasoner_engine.grade`，返回 `judged_by="consensus(k/n)"`、`agreement`、`ground_truth`（共识答案）。**✅ 真链路已验收（2026-06-27，密钥到位后）**：`POST /verify` 真 HTTP 对 `2x+4=10` 答 `3`→`answer_correct=True`、答 `4`→`False`，`judged_by=consensus`、`votes_label=consensus(3/3)`，确经多路共识而非 SymPy 兜底（详见 `DEVELOPMENT_PLAN.md` §4 验收）。**SymPy 已降为兜底**：仅当网关不可用或多路不一致时，用它对可解代数做非权威交叉校验（`judged_by="sympy-fallback"`）；判不出就返回"未判定"（`correct=null`），绝不瞎猜。原单次 `claude+sympy` 判分簇（`_claude_grade`/`_eval_closed_form`/`build_grade_prompt`）**已删除**。原"SymPy 唯一事实来源、不得另算"的绝对约束早已废止。<br>　**仍未做（第 3 步）**：`NeuroSymbolicEngine` 尚未迁入 `legacy/`，仍为 `/analyze`·`/hint`·`/animate`·`/plot` 提供 latex/分类/步骤渲染（非正确性用途）。
    - **门禁已放宽**：`PolicyEngine.domain_restriction` 现接受自然语言应用题（CJK/字母/数字均算"内容"，只拦符号垃圾）；注入 token 与长度仍是硬拦截，安全不变。
    - **自然语言识别**：`NeuroSymbolicEngine.solve_with_steps` 现会识别应用题（含 CJK/`?`/解析出>3 个自由符号即判为 prose），标 `verification_status="unparseable"`、`solution=None`，避免 SymPy 把"小明有3个苹果"硬解成垃圾符号还自称 verified。
 2. **Socratic 约束不可绕过**：默认不直接给最终答案，分 5 级渐进提示。
@@ -75,11 +75,13 @@ math/
     │   ├── config.py               ← .env 加载 + Claude/OCR 配置（唯一读密钥处；自写 dotenv，无 python-dotenv 依赖）
     │   ├── claude_service.py       ← Claude 网关客户端（urllib，超时/断路器/限速）
     │   ├── recognize.py            ← nex-n2-pro 视觉 OCR（urllib，含图像预处理）
-    │   ├── prompts.py              ← Claude 系统提示（Socratic 提示 / 聊天 / 出题 JSON）
+    │   ├── prompts.py              ← Claude 系统提示（Socratic / 聊天 / 出题 / 多路求解 JSON）
+    │   ├── reasoner.py             ← ★多路共识推理器（去 SymPy 判分的正解来源；自带数值归一器）
     │   ├── auth.py                 ← 账户/会话（SQLite, PBKDF2, 限速）
     │   ├── exam.py                 ← 考试题库（SQLite, 知识点分类法 + 模板题）
     │   └── memory.py               ← 持久经验记忆（SQLite, 自适应难度，跨重启留存）
     ├── requirements.txt            ← 依赖（已移除 easyocr/pytesseract）
+    ├── test_reasoner_offline.py    ← ★去符号化判分核心的离线回归（归一器+共识投票，44 例，无网关/无 pytest）
     ├── .env                        ← 密钥（gitignore；含真实值）
     ├── .env.example                ← 密钥模板
     └── data/{users.db,exams.db,memory.db}  ← SQLite 数据（gitignore）
@@ -114,14 +116,17 @@ math/
 | GET | `/exam/by-tag?tag=&dimension=` | 按标签即时检索题目（SQL 索引） | 否 |
 | POST | `/auth/signup`,`/signin`,`/signout` · GET `/auth/me` | 账户/会话 | Bearer（me/signout） |
 | GET | `/session/{id}`, `/architecture`, `/policies` | 会话/架构元数据/策略 | 否 |
-| POST | `/verify`, `/plot`, `/animate` | SymPy 验证 / 绘图数据 / 模板动画；`/verify` 可传 `answer`+`session_id`，混合判分（SymPy 优先，应用题走 Claude 翻算式→SymPy 复核），返回 `judged_by`/`computation`/`ground_truth`，并把"已解出"信号写入经验记忆 | 否 |
+| POST | `/verify`, `/plot`, `/animate` | SymPy 渲染步骤 / 绘图数据 / 模板动画；`/verify` 可传 `answer`+`session_id`，**判分以多路 LLM 共识为准**（SymPy 仅兜底），返回 `judged_by`（如 `consensus(3/3)`/`sympy-fallback`）`/agreement/ground_truth`，并把"已解出"信号写入经验记忆 | 否 |
 
 > **重要**：曾短暂用 `require_user` 给 `/analyze /hint /recognize /claude/chat` 加鉴权，
 > 后**按用户要求移除**（demo 不需登录即可用）。`require_user` / `optional_user` 依赖仍在
 > `main.py` 中定义但未使用，可随时复用。
 
-### 3.3 核心类（均在 `main.py`，蓝图命名）
-- `NeuroSymbolicEngine` — SymPy 求解/化简/验证/分类/步骤生成（**项目最强、最可靠的部分**）。
+### 3.3 核心类（多在 `main.py`，蓝图命名）
+- `LLMReasoner`（`reasoner.py`，单例 `reasoner_engine`）— **判分正解来源**：多路独立求解 +
+  共识投票 + 自带去 SymPy 数值归一器；`solve()` 返回共识，`grade()` 比对学生答案。无网关优雅降级。
+- `NeuroSymbolicEngine` — SymPy 求解/化简/验证/分类/步骤生成；**判分上已降为兜底**（`/analyze`·
+  `/hint`·`/animate`·`/plot` 仍用它做 latex/分类/步骤渲染，待第 3 步迁 `legacy/`）。
 - `SocraticEngine` — 5 级提示模板，绝不直接给答案。
 - `PolicyEngine` — 输入级策略校验 + 罚分（SEPGA 的输入侧）。
 - `ExperienceMemory` → 已迁移为 `backend/app/memory.py::PersistentExperienceMemory`，
@@ -213,6 +218,8 @@ math/
 ## 8. 验证文化（沿用此法）
 
 本项目历来用"**运行并观测真实行为**"验证，而非只跑单测：
+- **去符号化判分核心**（归一器+共识投票，纯 Python、无网关）：跑 `py -3.12 backend/test_reasoner_offline.py`
+  （44 例回归，失败非零退出）。此核心即使在 `.env` 密钥空缺、真链路无法验证时也始终可验。
 - 后端：`curl` / Python `urllib` 打接口看返回。
 - 前端：headless Chrome（`puppeteer-core`，Chrome 在 `C:/Program Files/Google/Chrome/Application/chrome.exe`）驱动页面、截图、断言 DOM。
 - 接手后改任何东西，请同样"跑起来看"，并注意网关慢调用要给足超时。

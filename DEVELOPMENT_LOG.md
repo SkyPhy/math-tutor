@@ -5,7 +5,7 @@
 > [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md)。三者互补，建议按此顺序读：
 > 本文（怎么来的）→ HANDOFF（现在是什么）→ DEVELOPMENT_PLAN（往哪去）。
 >
-> 最后更新：2026-06-26。
+> 最后更新：2026-06-27。
 
 ---
 
@@ -89,6 +89,30 @@
 - **运行验证**：`/hint` 分级 `[1,2,3]` 递增；**重启进程后** `/session/{id}` 仍有历史，
   下一次 `/hint` 续接到 4（非重置为 1）。同时复测了慢接口（auth 全生命周期、/recognize、
   /exam/generate 25/25）全部通过。
+
+### 阶段 G — 去符号化第 1-2 步：多路共识判分（2026-06-27）✅
+落地"放弃 SymPy、大模型自行运算"的前两步（§1 原则 1、`docs/DEVELOPMENT_PLAN.md` §4）。
+- 新增 `backend/app/reasoner.py::LLMReasoner`（单例 `reasoner_engine`）：同一题 **N 路独立求解**
+  （`_ANGLES` 不同视角 + `_TEMPS` 0.2/0.6/0.9 抖动）→ 抽取各路 `final_answer` → **多数共识**定答案，
+  状态 `consensus`/`plurality`/`no_consensus`/`no_paths`/`unavailable`。答案比较用**自带的去 SymPy
+  数值归一器**（`fractions`+`ast` 安全求值：`1/2`=`0.5`=`50%`、集合无序、带单位用数值核回退）。
+- 新增 `prompts.build_solve_prompt(problem, angle)`（每路输出严格 JSON：答案+步骤+置信度）。
+- `main.py`：`_check_student_answer` 改为**共识优先**——`reasoner_engine.grade` 出 `correct`/
+  `agreement`/`ground_truth`；`/verify` 暴露 `judged_by`（如 `consensus(3/3)`）/`agreement`/
+  `votes_label`。SymPy 仅在网关不可用/多路不一致时兜底（`sympy-fallback`），判不出返回 `null` 不瞎猜。
+- **删除**已被取代的单次判分簇：`_claude_grade`/`_eval_closed_form`/`_parse_json_object`（main）
+  与 `build_grade_prompt`（prompts）。
+- **离线验证**（无 `.env`/网关）：归一器+共识投票回归脚本 `backend/test_reasoner_offline.py`
+  （**44 条**，纯标准库无 pytest，任意 cwd 可跑 `py -3.12 backend/test_reasoner_offline.py`，失败非零退出）
+  全过；`x+2=5→3` 走 `sympy-fallback` 判对、`→9` 判错、二次方程 `2,3` 判对、应用题无网关返回"未判定"、
+  空答案守卫。**✅ 真链路多路共识已验收（2026-06-27 密钥到位后）**：应用题 3/3 共识、`grade` 判对/判错均
+  `consensus(3/3)`、两管注水题 4/4 共识得分数 `24/5`、`POST /verify` 真 HTTP 确经 `judged_by=consensus`
+  非 SymPy 兜底（详见 `docs/DEVELOPMENT_PLAN.md` §4 验收）。第 3 步（`NeuroSymbolicEngine` 迁 `legacy/`）尚未做。
+- **归一器加固（2026-06-27，离线可验，无网关依赖）**：用回归脚本"跑起来看"暴露并修复两处会导致**误判**
+  的缺陷——① 千位分隔符：`1,000`/`12,345` 旧逻辑被当作集合 `{1,0}`/`{12,345}` 拆开，永不等于 `1000`；
+  现按"逗号后恰好 3 位数字"识别为同一数的千位分组并剥除（`_strip_thousands`），而 `2, 3`/`2,3` 仍判为集合。
+  ② 方程组：`x=2, y=3` 旧逻辑对整串取 `split("=")[-1]` → 坍缩成单值 `3`、丢掉 `x=2`；现把 `=` 处理**下放到每个
+  分片**（`_canonical_piece`），方程组每个变量各留其值。两修复均不影响"缺根/多根"判否（回归脚本含对抗用例）。
 
 ---
 

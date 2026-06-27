@@ -54,6 +54,12 @@ from . import config
 from . import prompts
 from .claude_service import claude_service, ClaudeError
 
+# Multi-path LLM consensus reasoner — the SOURCE OF TRUTH for correctness,
+# replacing SymPy. Several independent derivations must AGREE before a verdict is
+# trusted (see reasoner.py). SymPy is kept only as a non-authoritative cross-check
+# and an offline fallback, never as the sole arbiter.
+from .reasoner import reasoner_engine
+
 # User accounts & sessions, backed by SQLite (auth.py / users.db).
 from . import auth
 
@@ -1820,27 +1826,10 @@ def get_policies():
     }
 
 
-def _parse_json_object(text: str) -> Optional[Dict[str, Any]]:
-    """Pull a single JSON object out of a model response (tolerate fences/prose)."""
-    if not text:
-        return None
-    t = text.strip()
-    t = _re.sub(r"^```(?:json)?", "", t).strip()
-    t = _re.sub(r"```$", "", t).strip()
-    start, end = t.find("{"), t.rfind("}")
-    if start != -1 and end > start:
-        t = t[start:end + 1]
-    try:
-        obj = _json.loads(t)
-    except Exception:
-        return None
-    return obj if isinstance(obj, dict) else None
-
-
 def _compare_answer(correct: List[str], answer: str) -> Optional[bool]:
     """Compare a student `answer` against known-correct value(s) (each a string).
     Handles boolean identities and numeric/symbolic sets. None = undetermined.
-    Shared by the SymPy-solve path and the Claude→SymPy computation path."""
+    Used by the SymPy fallback grader (`_sympy_grade`)."""
     if not correct:
         return None
 
@@ -1894,98 +1883,43 @@ def _sympy_grade(expression: str, answer: str) -> Optional[bool]:
     return _compare_answer(engine.get("solution") or [], answer)
 
 
-def _eval_closed_form(expr_str: str) -> Optional[str]:
-    """Deterministically evaluate an arithmetic expression to an exact value
-    string, or None if it has free symbols / won't parse. This is the bridge
-    that lets SymPy VERIFY a Claude-proposed computation: the LLM translates a
-    word problem into arithmetic, the CAS does the actual numbers — so the final
-    answer is never left to the model's mental math."""
-    if not expr_str or not expr_str.strip():
-        return None
-    try:
-        val = simplify(safe_parse(expr_str))
-    except Exception:
-        return None
-    if getattr(val, "free_symbols", set()):
-        return None  # not a closed number → can't verify symbolically
-    return str(val)
-
-
-def _claude_grade(expression: str, answer: str, session_id: Optional[str],
-                  model: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Judge an answer SymPy couldn't reach on its own (word problems, geometry,
-    statistics, …). Claude is asked to (a) reason step by step and (b) express
-    the answer as a SymPy-evaluable `computation`. When that computation reduces
-    to a closed number, SYMPY recomputes it and grades the student against THAT
-    (verifiable, mistake-proof arithmetic) → judged_by "claude+sympy". Only if no
-    machine-checkable computation is available do we fall back to Claude's own
-    boolean verdict → judged_by "claude". Returns None when Claude is unavailable
-    or unparseable, so the caller degrades to "undetermined"."""
-    if not claude_service.available():
-        return None
-    engine = NeuroSymbolicEngine.solve_with_steps(expression)
-    system = prompts.build_grade_prompt(expression, engine)
-    user = f'Student answer: "{answer}". Grade it now and return only the JSON.'
-    try:
-        text = claude_service.complete(
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            model=model,
-            session_id=session_id or "grade",
-            max_tokens=400,
-            temperature=0,
-        )
-    except ClaudeError:
-        return None
-    obj = _parse_json_object(text)
-    if not obj:
-        return None
-    reason = str(obj.get("reason", ""))[:200]
-
-    # Preferred: SymPy verifies the model's proposed computation, then grades.
-    ground_truth = _eval_closed_form(str(obj.get("computation") or ""))
-    if ground_truth is not None:
-        verdict = _compare_answer([ground_truth], answer)
-        if verdict is not None:
-            return {"correct": verdict, "judged_by": "claude+sympy",
-                    "reason": reason, "computation": str(obj["computation"]),
-                    "ground_truth": ground_truth}
-
-    # Fallback: trust Claude's own boolean judgement (no machine check possible).
-    if "correct" not in obj:
-        return None
-    val = obj["correct"]
-    correct = bool(val) if isinstance(val, bool) else None  # JSON null → None
-    return {"correct": correct, "judged_by": "claude", "reason": reason}
-
-
 def _check_student_answer(expression: str, answer: str, session_id: Optional[str] = None,
                           model: Optional[str] = None) -> Dict[str, Any]:
-    """Grade a student's answer under the HYBRID stance: SymPy decides where it
-    can (exact, instant, preferred); otherwise Claude reasons freely but its
-    arithmetic is verified by SymPy where possible. SymPy is no longer the SOLE
-    arbiter, so word problems / geometry / statistics are now gradable too.
+    """Grade a student's answer. Correctness now comes from CONSENSUS, not a CAS:
+    the LLM solves the problem several times independently and we keep the answer
+    the derivations AGREE on (see reasoner.py). This is the source of truth.
+
+    SymPy is demoted to a fallback for when the gateway is down or the independent
+    paths disagree — never the sole arbiter — so word problems / geometry /
+    statistics (which SymPy silently declines) are now gradable, while simple
+    algebra is still gradable offline.
+
     Returns {"correct": Optional[bool], "judged_by": str|None, "reason": str|None}
-    plus optional "computation"/"ground_truth"; correct=None = undetermined.
+    plus optional "ground_truth"/"agreement"/"votes_label"; correct=None =
+    undetermined (caller should not guess).
     """
     if not answer or not answer.strip():
         return {"correct": None, "judged_by": None, "reason": None}
 
-    sv = _sympy_grade(expression, answer)
-    if sv is not None:
-        return {"correct": sv, "judged_by": "sympy", "reason": None}
-
-    cg = _claude_grade(expression, answer, session_id, model)
-    if cg is not None and cg["correct"] is not None:
+    # ── Primary judge: multi-path LLM consensus ──
+    cg = reasoner_engine.grade(expression, answer, model=model, session_id=session_id)
+    if cg.get("correct") is not None:
         out = {"correct": cg["correct"], "judged_by": cg["judged_by"],
                "reason": cg.get("reason")}
-        if cg.get("computation"):
-            out["computation"] = cg["computation"]
-        if cg.get("ground_truth") is not None:
-            out["ground_truth"] = cg["ground_truth"]
+        for k in ("ground_truth", "agreement", "votes_label"):
+            if cg.get(k) is not None:
+                out[k] = cg[k]
         return out
 
-    return {"correct": None, "judged_by": None, "reason": (cg or {}).get("reason")}
+    # ── Fallback: non-authoritative SymPy cross-check (offline / disagreement) ──
+    # Only trusted where SymPy is confident; used because consensus was unavailable
+    # (gateway down) or the independent paths failed to agree.
+    sv = _sympy_grade(expression, answer)
+    if sv is not None:
+        return {"correct": sv, "judged_by": "sympy-fallback", "reason": None}
+
+    return {"correct": None, "judged_by": cg.get("judged_by"),
+            "reason": cg.get("reason")}
 
 
 @app.post("/verify")
@@ -1994,11 +1928,12 @@ def verify_expression(request: MathRequest):
     Standalone verification endpoint — useful for checking student work.
 
     If the student supplies their own `answer` (plus a `session_id`), the answer
-    is graded under the hybrid stance: SymPy decides where it can, else Claude
-    judges (see `_check_student_answer`). The verdict is recorded in experience
-    memory as a genuine "solved / not solved" signal, which is what lets
-    `success_rate` and adaptive difficulty actually move over time. The response
-    carries `judged_by` so the UI/caller knows who graded it.
+    is graded by MULTI-PATH LLM CONSENSUS — several independent derivations must
+    agree — with SymPy kept only as an offline fallback (see
+    `_check_student_answer`). The verdict is recorded in experience memory as a
+    genuine "solved / not solved" signal, which is what lets `success_rate` and
+    adaptive difficulty actually move over time. The response carries `judged_by`
+    (e.g. "consensus(3/3)") and `agreement` so the UI/caller knows how it graded.
     """
     policy_result = PolicyEngine.evaluate(request.expression)
     if not policy_result.allowed:
@@ -2024,11 +1959,13 @@ def verify_expression(request: MathRequest):
         response["judged_by"] = verdict["judged_by"]
         if verdict.get("reason"):
             response["judge_reason"] = verdict["reason"]
-        # Expose the verifiable reasoning trace when SymPy checked Claude's math.
-        if verdict.get("computation"):
-            response["computation"] = verdict["computation"]
+        # Expose the consensus trace: the agreed answer + how many paths agreed.
         if verdict.get("ground_truth") is not None:
             response["ground_truth"] = verdict["ground_truth"]
+        if verdict.get("agreement") is not None:
+            response["agreement"] = verdict["agreement"]
+        if verdict.get("votes_label"):
+            response["votes_label"] = verdict["votes_label"]
         if request.session_id and is_correct is not None:
             session = memory.get_or_create_session(request.session_id)
             # Record success at however many hints the student had reached.

@@ -123,39 +123,36 @@ Guidelines:
 - Stay on mathematics and learning; gently redirect off-topic requests."""
 
 
-def build_grade_prompt(
-    expression: str,
-    engine_result: Optional[Dict[str, Any]] = None,
-) -> str:
-    """System prompt for grading a student's answer when SymPy could NOT decide
-    (word problems, geometry, statistics, …). Claude reasons FREELY, but its
-    reasoning must be VERIFIABLE: it expresses the final answer as a plain
-    arithmetic `computation` that the backend re-evaluates with SymPy, so the
-    actual numbers are never left to the model's mental math. Strict JSON out."""
-    ref = ""
-    if engine_result and engine_result.get("verification_status") == "verified":
-        ref = ("\n\nA SymPy reference is available (prefer it if your own work "
-               f"conflicts):\n{_ground_truth_block(engine_result)}")
-    return f"""You are a careful elementary-mathematics grader. Decide whether the
-student's answer to the problem is mathematically correct.
+def build_solve_prompt(problem: str, angle: str = "") -> str:
+    """System prompt for ONE independent solution path in the consensus reasoner.
 
-Problem: {expression}{ref}
+    This is the heart of the post-SymPy stance: instead of trusting a CAS, we ask
+    the model to solve the problem from scratch SEVERAL times via different angles
+    and keep the answer the independent derivations agree on. So each path must
+    reason and compute ON ITS OWN — no external checker stands behind it.
 
-Method (this matters — your arithmetic will be machine-checked):
-1. Reason through the problem step by step in `steps`.
-2. Reduce the solution to ONE plain arithmetic expression in `computation` that a
-   computer algebra system can evaluate — e.g. "3+2", "(8*7)/2", "12/4". Use only
-   numbers and + - * / ( ) ^ . Do NOT compute the final number yourself; leave it
-   to the machine. If the problem cannot be reduced to one arithmetic expression
-   (e.g. a proof, or a non-numeric answer), set `computation` to "".
+    `angle` nudges this path toward a distinct line of attack so the paths stay
+    genuinely independent (agreement then means something). Strict JSON out so the
+    backend can tally votes mechanically."""
+    angle_line = f"\nApproach for THIS attempt: {angle}" if angle else ""
+    return f"""You are solving one math problem independently, from scratch. Do the
+arithmetic yourself and carefully — nothing else will check your work, so the
+answer must stand on its own.{angle_line}
+
+Problem: {problem}
 
 Output ONLY a strict JSON object — no prose, no code fence:
-  {{"steps": "<your brief working>",
-    "computation": "<one arithmetic expression, or \\"\\">",
-    "correct": true or false or null,
-    "reason": "<one short sentence, in the student's language>"}}
-Set "correct" to your own judgement (used only when `computation` is empty); when
-you genuinely cannot tell, use null."""
+  {{"steps": "<your concise working>",
+    "final_answer": "<ONLY the answer, as the student should write it: a number, a
+                      fraction in lowest terms, a comma-separated set like \\"2, -3\\",
+                      \\"true\\"/\\"false\\", or a short phrase — NOT a sentence>",
+    "answer_kind": "number | set | boolean | expression | text",
+    "confidence": <your confidence this is correct, 0.0 to 1.0>}}
+
+Rules:
+- Reduce numbers to simplest form (e.g. "1/2" not "2/4", "7" not "7.0").
+- For yes/no questions answer "true" or "false". For several solutions, comma-separate them.
+- If the problem is genuinely unanswerable, set final_answer to "" and confidence to 0."""
 
 
 def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
