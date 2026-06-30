@@ -190,6 +190,91 @@ def _call_nex_ocr(png_bytes: bytes) -> str:
     return content
 
 
+# ── Path 2: send the drawing straight to the general AI (Claude vision) ──────
+# The design offers two ways to turn whiteboard ink into text:
+#   1. render → nex-n2-pro specialised OCR (the default above), and
+#   2. hand the drawing directly to the general AI.
+# This is path 2: post the PNG to the Anthropic-compatible Messages API as an
+# image block. Useful as an alternative/fallback engine when nex is unconfigured,
+# slow, or returns nothing. Reuses the Claude gateway config (CLAUDE_*).
+
+def claude_vision_available() -> bool:
+    """True when the Claude gateway (used as a vision OCR fallback) is configured."""
+    return config.is_configured()
+
+
+def _call_claude_vision(png_bytes: bytes) -> str:
+    """POST the image to the Claude Messages API as an image block and return the
+    transcribed text. Raises on any transport/HTTP/parse failure."""
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    payload = {
+        "model": config.CLAUDE_DEFAULT_MODEL,
+        "max_tokens": 512,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64",
+                                                 "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": _OCR_PROMPT},
+                ],
+            }
+        ],
+    }
+    headers = {
+        "content-type": "application/json",
+        "anthropic-version": config.CLAUDE_ANTHROPIC_VERSION,
+    }
+    if config.CLAUDE_AUTH_HEADER == "authorization":
+        headers["authorization"] = f"Bearer {config.CLAUDE_API_KEY}"
+    else:
+        headers["x-api-key"] = config.CLAUDE_API_KEY
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        config.CLAUDE_BASE_URL + "/v1/messages", data=body, headers=headers, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=config.CLAUDE_TIMEOUT) as resp:
+        obj = json.loads(resp.read().decode("utf-8"))
+
+    # Anthropic Messages: content is a list of blocks; concat the text ones.
+    content = obj.get("content") if isinstance(obj, dict) else None
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content
+                       if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def recognize_via_claude(image_bytes: bytes) -> dict:
+    """Path-2 recognition: transcribe handwriting with Claude vision instead of
+    nex OCR. Same {"text", "status"} contract as recognize_detailed()."""
+    if not config.is_configured():
+        return {"text": "", "status": "unconfigured"}
+    try:
+        png_bytes = _preprocess(image_bytes)
+    except Exception:
+        png_bytes = image_bytes
+    try:
+        raw = _call_claude_vision(png_bytes)
+    except (TimeoutError, socket.timeout):
+        print("[recognize] Claude vision timed out.")
+        return {"text": "", "status": "timeout"}
+    except urllib.error.URLError as e:
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            return {"text": "", "status": "timeout"}
+        print(f"[recognize] Claude vision error: {e}")
+        return {"text": "", "status": "error"}
+    except (urllib.error.HTTPError, json.JSONDecodeError) as e:
+        print(f"[recognize] Claude vision error: {e}")
+        return {"text": "", "status": "error"}
+    except Exception as e:
+        print(f"[recognize] Claude vision unexpected error: {e}")
+        return {"text": "", "status": "error"}
+    text = _clean_math_text([raw])
+    return {"text": text, "status": "ok" if text else "empty"}
+
+
 def warmup() -> bool:
     """No local model to preload (OCR is a remote API now). Kept for the
     startup hook's call site; returns whether the OCR gateway is configured."""

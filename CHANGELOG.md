@@ -11,6 +11,31 @@
 
 ---
 
+## v0.2.5a — 核心后端三管线架构补全：学科网题源 + 题号规范 + AI 免责声明 + 笔画直传 AI
+
+把用户的「核心后端架构」草图补全并落地为可运行增量（出题 / 作答 / AI 反馈三管线）。
+文档：`docs/DEVELOPMENT_PLAN.md` 新增「★ 核心后端三管线架构」节（分层结构图 + 状态机流程图 +
+题号规范 + 差距清单）。代码落地差距清单 4 项：
+
+- **题号规范（`exam.py`）**：题目 id 从随机 `q-<hex>` 改为**结构化** `{来源}-{YYYYMMDD}-{SEQ}`
+  （如 `300-20250416-000123`）。来源码 `300`=AI / `200`=学科网 / `100`=模板种子 / `000`=其它；
+  `SEQ` 为全局自增（`meta` 表存计数器，补零 6 位，越界自然加长）。`save_question` 按 `q["source"]`
+  在事务内分配号；DB 随机取题**复用原号不新建**。旧 `q-<hex>` 行与新格式共存，读取无格式假设。
+- **学科网题源（`main.XuekeProvider` + `config.XUEKE_*`）**：出题「三选一」补上第三条
+  （AI 生成 / 数据库随机 / **学科网 API 按标签**）。`XuekeProvider.get_by_tag` 拉取→归一化→存库
+  （得 `200-…` 号）；`_normalize` 容忍多种字段拼写（content/statement/stem、answer/solution…）。
+  `/practice/next?source=xueke&tag=X` 接线；未配 `.env` 网关时**优雅降级**到本地题库。
+- **AI 免责声明（`_bank_to_card`）**：题卡新增 `disclaimer` 字段，题面下方（**不计入题面**）显示
+  「本题由 AI 生成，请注意甄别。」（`ai` 源）/「本题来自学科网题库。」（`xueke` 源）；其它源为 `null`。
+  `/practice/next` 响应同时带 `from_source`（ai/bank/xueke）便于前端展示题源。
+- **笔画直传 AI（`recognize.recognize_via_claude` + `/recognize?method=`）**：作答识别补上路径 2
+  ——把白板 PNG 直接交给 **Claude 视觉**（Messages API image block），与路径 1（nex 专用 OCR）并存。
+  `method=nex`（默认）/ `claude` / `auto`（nex 失败回退 Claude）；与现有 `{text,status}` 契约一致，
+  未配网关时回退 mock。
+- **验收（离线）**：`py -3.12` 导入全部模块通过；`exam.save_question` 三种来源分别生成
+  `300-/100-/000-` 号且 SEQ 递增；学科网/Claude 视觉未配时 `available()` 返回 False 并降级。
+  真链路（学科网、Claude 视觉）需 `.env` 填入对应网关后验证。
+
 ## v0.2.4a — 批量出题 `/exam/generate` 迁移到标签感知路径（逻辑类型 + 难度 + 自演化）
 
 把 25 题批量出题从「只打知识点」升级到与单题路径一致的**标签感知 + 自演化**链路：

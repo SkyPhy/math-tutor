@@ -1,4 +1,12 @@
-# 开发流程总结 / Development Log
+# 开发流程总结 / Development Log（已归档 · OUTDATED）
+
+> 🗄️ **已归档 · OUTDATED（od）** —— 本文件是**项目早期开发历程的叙事，已停止维护**（最后更新 2026-06-27），
+> 不反映 v0.2.x（逻辑思维类型 / 动态标签 / 诊断 / 多路共识判分）与 v0.2.5a（学科网题源 / 结构化题号 / 笔画直传 AI）。
+> **当前事实来源**：[`docs/DEVELOPMENT_PLAN.md`](../DEVELOPMENT_PLAN.md) ＋ [根 `CHANGELOG.md`](../../CHANGELOG.md) ＋
+> `.claude/context/`。其引用的 `docs/HANDOFF.md` 亦已归档为同目录 [`HANDOFF.od.md`](HANDOFF.od.md)。
+> 归档于 2026-06-30，仅作历史参考（文内相对链接为归档前路径）。
+
+---
 
 > 面向接手的下一位 AI 开发者。本文件记录**项目是怎么一步步建起来的**（开发历程 + 关键决策 +
 > 踩过的坑），是过程叙事；**当前真实状态**见 [`docs/HANDOFF.md`](docs/HANDOFF.md)，**未来路线图**见

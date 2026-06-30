@@ -140,6 +140,31 @@ def ocr_configured() -> bool:
     return bool(NEX_OCR_BASE_URL and NEX_OCR_API_KEY)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  学科网 (XUEKE) question provider — tag-filtered question feed
+# ═══════════════════════════════════════════════════════════════════════════
+# A third question source besides AI-generation and the local bank: pull
+# questions matching a tag from 学科网's API. The exact API contract differs per
+# account, so the endpoint/key are configured here and the response is normalised
+# in main.XuekeProvider (which documents the expected JSON shape). When unset the
+# provider reports itself unavailable and the caller falls back to the bank.
+XUEKE_BASE_URL: str = os.environ.get("XUEKE_BASE_URL", "").rstrip("/")
+XUEKE_API_KEY: str = os.environ.get("XUEKE_API_KEY", "")
+# Path appended to the base URL for a tag query (override if the API differs).
+XUEKE_SEARCH_PATH: str = os.environ.get("XUEKE_SEARCH_PATH", "/questions/search")
+XUEKE_TIMEOUT: float = float(os.environ.get("XUEKE_TIMEOUT", "10"))
+
+
+def xueke_configured() -> bool:
+    """True when the 学科网 provider has a URL and key."""
+    return bool(XUEKE_BASE_URL and XUEKE_API_KEY)
+
+
+def xueke_endpoint() -> str:
+    """Full tag-search URL for the 学科网 provider."""
+    return XUEKE_BASE_URL + XUEKE_SEARCH_PATH
+
+
 def is_configured() -> bool:
     """True when we have enough to attempt a gateway call."""
     return bool(CLAUDE_BASE_URL and CLAUDE_API_KEY)

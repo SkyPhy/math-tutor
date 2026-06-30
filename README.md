@@ -5,21 +5,27 @@ mathematics. A **FastAPI** backend pairs **Claude** (natural-language reasoning 
 with a **vision OCR** model for handwriting; a **static multi-page frontend** provides the
 whiteboard, chat, and auto-generated exams.
 
-> **★ Direction (2026-06-26): drop SymPy, let the LLM do the computation itself.** The
-> deterministic SymPy verifier is being retired from the main path; solving and grading move
-> to Claude end-to-end, with correctness coming from self-iteration / multi-path consensus
-> rather than a CAS. The code today is still the **transitional hybrid**; see
-> [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §4 "下一首要目标".
+> **★ Direction (realized): verification by consensus, not by CAS.** Grading's source of
+> truth is now **multi-path LLM consensus** (`backend/app/reasoner.py`) — the same problem is
+> solved several independent ways and the majority answer wins. SymPy has been retired to
+> `backend/app/legacy/sympy_grader.py` as a non-authoritative offline fallback (it still
+> renders steps/plots for `/analyze`·`/hint`·`/animate`·`/plot`). See
+> [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §4.
 
-> **New here / taking over the project?** Start with [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md)
-> (how the project was built, step by step), then [`docs/HANDOFF.md`](docs/HANDOFF.md) for the
-> full factual snapshot, and [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) for the roadmap.
+> **New here / taking over the project?** Read [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md)
+> (architecture + roadmap, kept current) and the [root `CHANGELOG.md`](CHANGELOG.md) (every
+> version, newest first). The earlier `DEVELOPMENT_LOG.md` / `HANDOFF.md` snapshots are
+> **archived** under [`docs/legacy/`](docs/legacy/) (`*.od.md` = outdated, history only).
 
 ## Core principles
-- **(Direction) Drop SymPy → the LLM computes** — historically SymPy was the verification
-  anchor (it solved/checked every result). The project is now moving to Claude reasoning
-  end-to-end, with SymPy retired; correctness rests on self-iteration / multi-path consensus.
-  The current code is a transitional hybrid (SymPy still double-checks where it can).
+- **Verification by consensus, not by CAS** — grading's source of truth is multi-path LLM
+  consensus (`reasoner.py`): the same problem is solved several independent ways and the
+  majority answer wins. SymPy is a non-authoritative offline fallback only.
+- **Logic-thinking-type training (the v2.0 differentiator)** — questions are tagged on two
+  orthogonal axes — knowledge point × logic-thinking type — plus an open-ended difficulty
+  (1 = 认识数字 … 10 = 大学通识, higher allowed). Practice adapts to a student's weakest
+  *logic type*, not just weak knowledge points. The tag vocabulary is self-evolving (the AI
+  can add/remove tags at runtime; stored in `tags.db`).
 - **Socratic constraint** — the tutor gives graduated hints (5 levels), never the final
   answer up front.
 - **Graceful degradation** — with no API keys configured, the tutor falls back to a
@@ -28,19 +34,26 @@ whiteboard, chat, and auto-generated exams.
 ## Architecture
 ```
 math/
-├── README.md  .gitignore
+├── README.md  CHANGELOG.md  .gitignore
 ├── backend/                      Backend — FastAPI
 │   ├── app/                      Python package (run as app.main:app)
-│   │   ├── main.py               Routes + core engines (SymPy, Socratic, Policy, …)
-│   │   ├── config.py             .env loader + Claude/OCR settings (the ONLY secrets reader)
-│   │   ├── claude_service.py     Claude gateway client (timeout / circuit-breaker)
-│   │   ├── recognize.py          Handwriting OCR (nex-n2-pro vision)
-│   │   ├── prompts.py            Claude system prompts
-│   │   └── auth.py / exam.py     SQLite: accounts/sessions, exam question bank
+│   │   ├── main.py               Routes + core engines (Socratic, Policy, rendering, providers)
+│   │   ├── reasoner.py           Multi-path LLM consensus — grading source of truth
+│   │   ├── config.py             .env loader + Claude/OCR/Xueke settings (the ONLY secrets reader)
+│   │   ├── claude_service.py     Claude gateway client (timeout / circuit-breaker / rate-limit)
+│   │   ├── recognize.py          Handwriting OCR (nex-n2-pro vision; + Claude-vision path)
+│   │   ├── prompts.py            Claude system prompts (Socratic / chat / generation / solve)
+│   │   ├── exam.py               SQLite question bank + catalogue + structured numbering
+│   │   ├── tags.py               Self-evolving tag vocabulary (tags.db; AI-managed)
+│   │   ├── diagnosis.py          Logic-flaw diagnosis (student + AI-self consensus signals)
+│   │   ├── memory.py             Persistent experience memory (memory.db)
+│   │   ├── auth.py               Accounts / sessions (SQLite, PBKDF2)
+│   │   └── legacy/sympy_grader.py  Retired SymPy grader — non-authoritative offline fallback
 │   ├── requirements.txt
+│   ├── test_reasoner_offline.py  Offline regression for the consensus normaliser (no gateway)
 │   ├── .env.example              Template — copy to .env and fill in keys
 │   ├── .env                      Your real keys (gitignored, never committed)
-│   └── data/                     SQLite DBs (users.db, exams.db) — gitignored
+│   └── data/                     SQLite DBs (users/exams/tags/diagnosis/memory.db) — gitignored
 ├── web/                          Frontend — static HTML/CSS/JS (no build step)
 │   ├── index.html                Landing page (entry point)
 │   ├── signin.html / signup.html Auth pages
@@ -48,20 +61,21 @@ math/
 │   ├── demo_exam.html            Auto-generated exam (covers all knowledge points)
 │   ├── demo_standalone.html      Core tutor: whiteboard, OCR, chat, hints (+ exam mode)
 │   └── legacy/                   Early React/Vite prototype (reference only, not used)
-├── docs/                         HANDOFF, DEVELOPMENT_PLAN, design/ (blueprint PDF/MD)
+├── docs/                         DEVELOPMENT_PLAN, LOGIC_TAXONOMY, design/ (blueprint),
+│   └── legacy/                   Archived docs (HANDOFF.od.md, DEVELOPMENT_LOG.od.md)
 └── lesson/README.md              Knowledge-point taxonomy (exam data source)
 ```
 
 ## Prerequisites
-- **Python 3.10+** (developed on 3.14)
+- **Python 3.12** (run with `py -3.12` on this setup)
 - Dependencies: `fastapi`, `uvicorn`, `sympy`, `python-multipart`, `pillow`
-  (standard library otherwise — no EasyOCR/Torch, no python-dotenv)
+  (standard library otherwise — no EasyOCR/Torch, no python-dotenv, no Anthropic SDK)
 
 ## Setup
 
 ### 1. Install dependencies
 ```bash
-pip install -r backend/requirements.txt
+py -3.12 -m pip install -r backend/requirements.txt
 ```
 
 ### 2. Configure keys (secrets live in ONE gitignored file)
@@ -81,7 +95,7 @@ Leave them blank to run in fallback mode (template tutor + mock OCR). `.env` and
 **Run from the `backend/` directory** (the app is a package, `app.main:app`):
 ```bash
 cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+py -3.12 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 On startup it prints health lines for the OCR gateway, user DB, and exam bank.
 
@@ -91,20 +105,27 @@ frontend; it calls the backend at `http://localhost:8000`).
 
 ## Features
 - **Whiteboard** — draw on the native canvas or Excalidraw (switchable), with fullscreen.
-- **Handwriting OCR** — submit the board; `nex-n2-pro` transcribes it to an expression.
-- **Math analysis** — solving, simplification, classification, step generation (currently
-  SymPy; being moved to Claude self-reasoning per the direction above).
+- **Handwriting OCR** — submit the board; `nex-n2-pro` transcribes it (`/recognize`). A
+  Claude-vision path (`?method=claude`/`auto`) is available as an alternative/fallback.
+- **Consensus grading** — `/verify` grades answers by multi-path LLM consensus (`reasoner.py`),
+  returning `judged_by` (e.g. `consensus(3/3)`), `agreement`, and the consensus `ground_truth`.
+- **Self-evolving question feed** — `/practice/next` serves from three sources: AI generation
+  (Claude), the local bank by tag, or the 学科网 API. AI-generated questions carry a
+  "请注意甄别" disclaimer; every saved question gets a structured id (`{source}-{date}-{seq}`).
+- **Logic diagnosis & adaptive practice** — tracks each student's weakest *logic-thinking type*
+  (and the AI's own consensus-divergence) and generates targeted questions (`?adaptive=<sid>`).
 - **Socratic hints** — 5 graduated levels, AI-generated (Claude) with template fallback.
 - **AI chat** — discuss a problem with a selectable Claude model.
-- **Auto exam** — generates a question for every knowledge point (two-dimension taxonomy
-  from [`lesson/README.md`](lesson/README.md)), stored in SQLite and tag-indexed; tags are
-  hidden behind a per-question button.
+- **Auto exam** — generates a question for every knowledge point (taxonomy from
+  [`lesson/README.md`](lesson/README.md)), tagged with logic types + difficulty, stored in
+  SQLite and tag-indexed; tags are hidden behind a per-question button.
 - **Accounts** — sign up / sign in / sign out (SQLite, PBKDF2-hashed passwords). Optional —
   the demo works without logging in.
 
 ## Notes & known issues
 - **OCR / exam generation can be slow (20–50s+)** — the shared gateway is latency-prone;
-  the UI shows a spinner. See [`docs/HANDOFF.md`](docs/HANDOFF.md) §6 for details.
+  the UI shows a spinner. See [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §5
+  (gateway resilience) for details.
 - `nex-n2-pro` is a reasoning model — `NEX_OCR_MAX_TOKENS` is kept generous and thinking
   is disabled for OCR (see `backend/app/recognize.py`).
 - CORS is open (`*`), so opening the HTML directly from disk works.

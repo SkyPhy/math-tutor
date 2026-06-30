@@ -1373,6 +1373,18 @@ def random_problem(
 # practice stream on-topic (Chinese elementary math) and aligned with the
 # de-symbolization direction. /problems(/random) remain as legacy endpoints.
 
+# Per-source notice rendered BELOW the question (not part of the statement). The
+# AI disclaimer is mandatory on AI-generated questions so students discern them.
+_SOURCE_DISCLAIMERS: Dict[str, str] = {
+    "ai": "本题由 AI 生成，请注意甄别。",
+    "xueke": "本题来自学科网题库。",
+}
+
+
+def _source_disclaimer(source: Optional[str]) -> Optional[str]:
+    return _SOURCE_DISCLAIMERS.get((source or "").strip().lower())
+
+
 def _bank_to_card(q: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt an exams.db question into the frontend problem-card shape."""
     qtags = q.get("tags", []) or []
@@ -1381,6 +1393,7 @@ def _bank_to_card(q: Dict[str, Any]) -> Dict[str, Any]:
              or (primary or {}).get("tag") or "练习")
     diff = q.get("difficulty")
     diff_label = f"难度 {diff}" if isinstance(diff, int) else (str(diff) if diff else "练习")
+    src = q.get("source", "bank")
     return {
         "id": q.get("id"),
         "title": (primary or {}).get("tag") or "练习题",
@@ -1389,7 +1402,10 @@ def _bank_to_card(q: Dict[str, Any]) -> Dict[str, Any]:
         "difficulty": diff_label,
         "topic": topic,
         "tags": qtags,
-        "source": q.get("source", "bank"),
+        "source": src,
+        # Notice shown beneath the question (NOT part of the statement). None when
+        # the source carries no notice; the AI one is mandatory for 甄别.
+        "disclaimer": _source_disclaimer(src),
     }
 
 
@@ -1499,33 +1515,145 @@ def _ai_one_question(grade: Optional[int] = None,
     return q
 
 
+# ── 学科网 (Xueke) provider: tag-filtered questions from an external API ──────
+#
+# The third question source (besides AI-generation and the local bank). Pulls
+# questions matching a knowledge/logic tag from 学科网, normalises them into our
+# bank-question shape, and PERSISTS them into exams.db with source="xueke" — so
+# each one is stamped with a 200-… structured id (see exam._make_id).
+#
+# The exact 学科网 API contract varies per account, so the endpoint/key live in
+# config (XUEKE_*) and `_normalize` accepts several common field spellings. When
+# unconfigured or unreachable, methods return None/[] and callers fall back to
+# the local bank — same graceful-degradation contract as the OpenTDB provider.
+#
+# Expected (configurable) response shape, JSON:
+#   {"questions": [
+#       {"content"|"statement"|"stem": "...",   # the question text (required)
+#        "latex": "...",                         # optional rendered math
+#        "answer"|"solution": "...",             # optional reference answer
+#        "difficulty": 5,                         # optional 1..N
+#        "tags": ["..."]}                         # optional extra tags
+#   ]}
+
+class XuekeProvider:
+    @staticmethod
+    def available() -> bool:
+        return config.xueke_configured()
+
+    @staticmethod
+    def _normalize(item: Dict[str, Any], tag: str) -> Optional[Dict[str, Any]]:
+        """Map one 学科网 result into our question dict, or None if it has no
+        usable statement. The requested `tag` is always attached so the saved
+        question is findable by it."""
+        statement = (item.get("content") or item.get("statement")
+                     or item.get("stem") or "").strip()
+        if not statement:
+            return None
+        answer = (item.get("answer") or item.get("solution") or "").strip()
+        diff = item.get("difficulty")
+        try:
+            diff = max(exam.DIFFICULTY_MIN, int(diff)) if diff is not None else None
+        except (ValueError, TypeError):
+            diff = None
+
+        # Build tag rows: the requested tag is primary; any extra tags the API
+        # returned are attached too (resolved against the live vocabulary).
+        names: List[str] = [tag]
+        for extra in (item.get("tags") or []):
+            extra = (extra or "").strip() if isinstance(extra, str) else ""
+            if extra and extra not in names:
+                names.append(extra)
+        qtags = [_question_tag_row(nm, primary=(i == 0)) for i, nm in enumerate(names)]
+
+        return {
+            "statement": statement,
+            "latex": (item.get("latex") or "").strip(),
+            "answer": answer,
+            "grade": None,
+            "difficulty": diff,
+            "source": "xueke",
+            "tags": qtags,
+        }
+
+    @classmethod
+    def _fetch(cls, tag: str, amount: int) -> List[Dict[str, Any]]:
+        """Query the 学科网 API for questions carrying `tag`. Returns the raw
+        result list (or [] on any failure)."""
+        params = {"tag": tag, "limit": amount}
+        url = config.xueke_endpoint() + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(
+            url, headers={"authorization": f"Bearer {config.XUEKE_API_KEY}",
+                          "User-Agent": "math-tutor/2.0"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=config.XUEKE_TIMEOUT) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:  # URLError, timeout, JSON errors, etc.
+            print(f"[Xueke] fetch failed: {exc}")
+            return []
+        if isinstance(data, dict):
+            return data.get("questions") or data.get("results") or []
+        return data if isinstance(data, list) else []
+
+    @classmethod
+    def get_by_tag(cls, tag: str) -> Optional[Dict[str, Any]]:
+        """Fetch ONE question for `tag`, persist it (gets a 200-… id), and return
+        the saved bank-question dict. None if unconfigured/unreachable/empty."""
+        if not cls.available() or not tag:
+            return None
+        for item in cls._fetch(tag, amount=5):
+            if not isinstance(item, dict):
+                continue
+            q = cls._normalize(item, tag)
+            if q is None:
+                continue
+            for row in q["tags"]:
+                tags.bump_usage(row["tag"])
+            q["id"] = exam.save_question(q)
+            return q
+        return None
+
+
 @app.get("/practice/next")
 def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
                   focus_logic: Optional[str] = None, difficulty: Optional[int] = None,
-                  adaptive: Optional[str] = None):
-    """One practice problem for the core tutoring UI.
+                  adaptive: Optional[str] = None, source: Optional[str] = None,
+                  tag: Optional[str] = None):
+    """One practice problem for the core tutoring UI — the 出题 pipeline.
 
-    Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB:
-      • default          → a random question from the existing bank
-      • ?generate=1      → generate a fresh AI question (gateway up), else the bank
-      • ?focus_logic=X   → generate one that TRAINS logic type X
-      • ?difficulty=N    → generate one at about difficulty N (open-ended)
-      • ?adaptive=<sid>  → generate one targeting THIS session's weakest logic type
-                           (from diagnosis); generation is implied
+    Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB.
+    The 出题方式 is chosen with `source` (the design's three-way choice); the
+    flags below are conveniences that imply a source:
+      • source=bank (default) → a random question from the existing bank
+      • source=ai / ?generate=1 → generate a fresh AI question (gateway up), else bank
+      • source=xueke&tag=X    → pull a 学科网 question carrying tag X, else bank
+      • ?focus_logic=X        → AI-generate one that TRAINS logic type X
+      • ?difficulty=N         → AI-generate one at about difficulty N (open-ended)
+      • ?adaptive=<sid>       → AI-generate one targeting THIS session's weakest
+                                logic type (from diagnosis); generation is implied
     An empty bank is auto-seeded with template questions, so the UI always works
     even offline. Replaces the old /problems/random (OpenTDB) data path.
     """
+    source = (source or "").strip().lower() or None
+
+    # 学科网: pull by tag, persist (→ 200-… id), serve; else fall through to bank.
+    if source == "xueke":
+        q = XuekeProvider.get_by_tag(tag or focus_logic or "")
+        if q is not None:
+            return {**_bank_to_card(q), "generated": False, "from_source": "xueke"}
+
     # Adaptive: derive the focus from the session's diagnosed weakest logic type.
     if adaptive and not focus_logic:
         weak = diagnosis.weak_logic_tags(adaptive, limit=1)
         focus_logic = weak[0] if weak else None
-    if adaptive or focus_logic or difficulty is not None:
+    if source == "ai" or adaptive or focus_logic or difficulty is not None:
         generate = True
 
     if generate:                       # opt-in AI generation, bank as fallback
         q = _ai_one_question(focus_logic=focus_logic, target_difficulty=difficulty)
         if q is not None:
-            return {**_bank_to_card(q), "generated": True,
+            return {**_bank_to_card(q), "generated": True, "from_source": "ai",
                     "focus_logic": focus_logic, "target_difficulty": difficulty}
 
     q = exam.random_question(exclude_id=exclude_id)
@@ -1534,7 +1662,7 @@ def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
         q = exam.random_question(exclude_id=exclude_id)
     if q is None:
         raise HTTPException(status_code=503, detail="题库为空且无法生成题目")
-    return {**_bank_to_card(q), "generated": False}
+    return {**_bank_to_card(q), "generated": False, "from_source": "bank"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1558,33 +1686,49 @@ def read_root():
 
 
 @app.post("/recognize")
-async def recognize_math(file: UploadFile = File(...)):
+async def recognize_math(file: UploadFile = File(...), method: str = "nex"):
     """
-    Handwriting OCR endpoint.
+    Handwriting OCR endpoint — the 作答 pipeline's 笔画→文字 step.
 
-    The whiteboard PNG submitted by the student is sent to the nex-n2-pro vision
-    model (see recognize.py). We return the recognised *text* — that string, not
-    the picture, is what the frontend then feeds into /analyze.
+    The whiteboard PNG submitted by the student is turned into *text* (that
+    string, not the picture, is what the frontend then feeds into /analyze).
+    `method` selects the design's two paths:
+      • "nex"    (default) — render → nex-n2-pro specialised OCR (path 1)
+      • "claude"           — hand the drawing to Claude vision (path 2)
+      • "auto"             — try nex first, fall back to Claude on miss/failure
 
-    Falls back to a mock expression when the OCR gateway isn't configured so the
+    Falls back to a mock expression when neither gateway is configured so the
     demo still works end-to-end before the .env is filled in.
     """
     image_bytes = await file.read()
-    # recognize_detailed makes a BLOCKING HTTP call (urllib) that can take many
-    # seconds. Running it directly in this async endpoint would freeze the whole
-    # event loop; offload it to a worker thread so the server stays responsive.
-    result = await run_in_threadpool(recognize.recognize_detailed, image_bytes)
-    status = result.get("status")
+    method = (method or "nex").strip().lower()
 
+    # recognize_* make a BLOCKING HTTP call (urllib) that can take many seconds.
+    # Running it directly in this async endpoint would freeze the event loop;
+    # offload to a worker thread so the server stays responsive.
+    if method == "claude":
+        result = await run_in_threadpool(recognize.recognize_via_claude, image_bytes)
+        engine = "claude-vision"
+    else:
+        result = await run_in_threadpool(recognize.recognize_detailed, image_bytes)
+        engine = "nex-n2-pro"
+        # auto: if nex produced nothing usable, retry with Claude vision (path 2).
+        if method == "auto" and result.get("status") != "ok" \
+                and recognize.claude_vision_available():
+            alt = await run_in_threadpool(recognize.recognize_via_claude, image_bytes)
+            if alt.get("status") == "ok":
+                result, engine = alt, "claude-vision"
+
+    status = result.get("status")
     if status == "ok":
-        return {"text": result["text"], "engine": "nex-n2-pro", "status": "ok"}
+        return {"text": result["text"], "engine": engine, "status": "ok"}
 
     if status == "unconfigured":
-        # OCR gateway not configured — keep the demo functional with a mock.
+        # No OCR gateway configured — keep the demo functional with a mock.
         return {"text": "2*x + 5 = 15", "engine": "mock", "status": "unconfigured"}
 
     # empty / timeout / error — surface the reason so the UI shows a useful note.
-    return {"text": "", "engine": "nex-n2-pro", "status": status}
+    return {"text": "", "engine": engine, "status": status}
 
 
 def generate_socratic(engine_result, hint_level, adaptive, model, session_id):

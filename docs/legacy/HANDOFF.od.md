@@ -1,4 +1,12 @@
-# 项目交接文档 / Project Handoff
+# 项目交接文档 / Project Handoff（已归档 · OUTDATED）
+
+> 🗄️ **已归档 · OUTDATED（od）** —— 本文件是 **2026-06-27 的事实快照，已停止维护**，与当前代码（v0.2.5a）多处不符
+> （例如：运行改用 `py -3.12`；已新增 `tags.py`/`diagnosis.py` 与逻辑思维类型 v2.0；学科网题源 `XuekeProvider`、
+> 结构化题号、笔画直传 AI 等）。**当前事实来源**：[`docs/DEVELOPMENT_PLAN.md`](../DEVELOPMENT_PLAN.md) ＋
+> [根 `CHANGELOG.md`](../../CHANGELOG.md) ＋ `.claude/context/01-CURRENT-STATE.md`。
+> 归档于 2026-06-30，仅作历史参考（文内相对链接为归档前路径，可能已失效）。
+
+---
 
 > 面向接手的 AI 开发者（Codex 等）。本文件描述**当前真实状态**，是事实快照；
 > 路线图见 [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)。

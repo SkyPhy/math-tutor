@@ -266,6 +266,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qtags_dim_tag ON question_tags(dimension, tag)"
         )
+        # Small key→int store for the global question sequence (题号 SEQ counter).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)"
+        )
         # Migration: add the difficulty column to older banks that predate it
         # (logic-type + difficulty is the v2.0 core need). Old rows stay NULL.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()}
@@ -274,15 +278,56 @@ def init_db() -> None:
         conn.commit()
 
 
+# ── Question numbering (用户规范) ───────────────────────────────────────────
+# Structured, parseable id:  {SOURCE}-{YYYYMMDD}-{SEQ}   e.g. 300-20250416-000123
+#   • SOURCE — a 3-digit code identifying who produced the question.
+#   • DATE   — UTC date of creation (matches created_at), so ids sort by day.
+#   • SEQ    — a GLOBAL auto-incrementing counter (1 → ∞), zero-padded to 6 for
+#     sortability; it just grows past 6 digits once it overflows ("到无穷").
+# A question pulled at random from the EXISTING bank keeps its original id — only
+# freshly-created (AI / 学科网 / template) questions are assigned a new number.
+SOURCE_CODES: Dict[str, str] = {
+    "ai": "300",        # AI 生成（Claude）
+    "xueke": "200",     # 学科网 API
+    "template": "100",  # 本地模板 / 种子题
+    "seed": "100",
+}
+DEFAULT_SOURCE_CODE = "000"  # 其它 / 未知来源
+
+
+def source_code(source: Optional[str]) -> str:
+    """3-digit code for a question source (`ai`→300, `xueke`→200, …)."""
+    return SOURCE_CODES.get((source or "").strip().lower(), DEFAULT_SOURCE_CODE)
+
+
+def _next_seq(conn: sqlite3.Connection) -> int:
+    """Atomically bump and return the global question sequence within `conn`'s
+    transaction (one SEQ per saved question, monotonically increasing)."""
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('q_seq', 1) "
+        "ON CONFLICT(key) DO UPDATE SET value = value + 1"
+    )
+    return conn.execute("SELECT value FROM meta WHERE key = 'q_seq'").fetchone()[0]
+
+
+def _make_id(conn: sqlite3.Connection, source: Optional[str]) -> str:
+    date = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return f"{source_code(source)}-{date}-{_next_seq(conn):06d}"
+
+
 def _new_id() -> str:
     return "q-" + secrets.token_hex(5)
 
 
 def save_question(q: Dict[str, Any]) -> str:
-    """Persist a question + its tags. Returns the new id."""
-    qid = _new_id()
+    """Persist a question + its tags. Returns the new id.
+
+    The id is the structured number `{SOURCE}-{YYYYMMDD}-{SEQ}` (see `_make_id`),
+    derived from `q["source"]` so AI questions get a 300-… number, 学科网 a 200-…,
+    templates a 100-…. The SEQ is allocated inside this transaction."""
     created = datetime.now(timezone.utc).isoformat()
     with _connect() as conn:
+        qid = _make_id(conn, q.get("source"))
         conn.execute(
             "INSERT INTO questions (id, statement, latex, answer, grade, difficulty, source, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
