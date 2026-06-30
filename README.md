@@ -2,8 +2,14 @@
 
 A Socratic (guided, never answer-dumping) AI math tutoring system for primary-school
 mathematics. A **FastAPI** backend pairs **Claude** (natural-language reasoning & tutoring)
-with a **vision OCR** model for handwriting; a **static multi-page frontend** provides the
-whiteboard, chat, and auto-generated exams.
+with a **vision OCR** model for handwriting; the student-facing UI is a **Vite + React + TS**
+app (`frontend/`) providing the whiteboard, chat, and the guided five-screen tutor flow.
+
+> **★ Frontend re-platform (v0.4).** The core student tutor moved from a single static
+> `web/demo_standalone.html` to a maintainable, config-driven **React app under `frontend/`**.
+> The **backend is unchanged** — React calls the same FastAPI endpoints over HTTP. The old
+> static pages are archived under [`web/legacyweb/`](web/legacyweb/). Run the frontend with
+> `cd frontend && npm install && npm run dev` (see [`frontend/README.md`](frontend/README.md)).
 
 > **★ Direction (realized): verification by consensus, not by CAS.** Grading's source of
 > truth is now **multi-path LLM consensus** (`backend/app/reasoner.py`) — the same problem is
@@ -54,13 +60,15 @@ math/
 │   ├── .env.example              Template — copy to .env and fill in keys
 │   ├── .env                      Your real keys (gitignored, never committed)
 │   └── data/                     SQLite DBs (users/exams/tags/diagnosis/memory.db) — gitignored
-├── web/                          Frontend — static HTML/CSS/JS (no build step)
-│   ├── index.html                Landing page (entry point)
-│   ├── signin.html / signup.html Auth pages
-│   ├── demo_sellection.html      Pick grade (1–6) + knowledge points
-│   ├── demo_exam.html            Auto-generated exam (covers all knowledge points)
-│   ├── demo_standalone.html      Core tutor: whiteboard, OCR, chat, hints (+ exam mode)
-│   └── legacy/                   Early React/Vite prototype (reference only, not used)
+├── frontend/                     Student tutor — Vite + React + TypeScript (run: npm run dev)
+│   ├── index.html                Vite entry (loads MathJax + the React app)
+│   ├── package.json  vite.config.ts  tsconfig.json
+│   └── src/                      App, config (SCREEN_DEFS/SOURCES/ACTIONS), api client,
+│                                 store (5-screen router), board/BoardEngine, screens/, components/
+├── web/                          Legacy static frontend (archived; see frontend/ for the live app)
+│   ├── legacyweb/                Old static pages — index / signin / signup / sellection /
+│   │                            exam / standalone (moved here in v0.4.0a, kept runnable)
+│   └── legacy/                   Earlier React/Vite prototype + demo_standalone.v0.2.html backup
 ├── docs/                         DEVELOPMENT_PLAN, LOGIC_TAXONOMY, design/ (blueprint),
 │   └── legacy/                   Archived docs (HANDOFF.od.md, DEVELOPMENT_LOG.od.md)
 └── lesson/README.md              Knowledge-point taxonomy (exam data source)
@@ -99,9 +107,14 @@ py -3.12 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 On startup it prints health lines for the OCR gateway, user DB, and exam bank.
 
-### 4. Open the frontend
-Open **`web/index.html`** in your browser (static files — no server needed for the
-frontend; it calls the backend at `http://localhost:8000`).
+### 4. Start the frontend
+```bash
+cd frontend
+npm install
+npm run dev          # Vite dev server → http://localhost:5173
+```
+It calls the backend at `http://localhost:8000` (override with `VITE_API_BASE`). The archived
+static pages still open directly from `web/legacyweb/` if you need them.
 
 ## Features
 - **Whiteboard** — draw on the native canvas or Excalidraw (switchable), with fullscreen.
@@ -122,20 +135,23 @@ frontend; it calls the backend at `http://localhost:8000`).
 - **Accounts** — sign up / sign in / sign out (SQLite, PBKDF2-hashed passwords). Optional —
   the demo works without logging in.
 
-## Student UI — v0.3 multi-screen redesign (planned, not yet built)
-The core `demo_standalone.html` is being re-planned from a single-page tool into a
-**five-screen guided flow**. Spec, navigation state machine, and the backend it needs live in
+## Student UI — five-screen guided flow (React, in progress)
+The core tutor is a **five-screen guided flow**, now built in `frontend/` (React + TS). Spec,
+navigation state machine, and the backend it needs live in
 [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §"v0.3 学生端「试卷测试」多屏交互重构".
 - **Screens**: ① problem (source picker AI/学科网/bank · tags toggle · whiteboard) → ② select
   (lasso/crop the strokes to send · pick OCR model) → ③ check (OCR review + correct, 3 render
   modes, save draft) → ④ AI assistant (line-by-line answer ↔ analysis, `<manim>` viz, per-line
   follow-up) and ⑤ ask (Q&A for "I'm stuck", no whiteboard).
+- **Status (v0.4.0a)**: scaffolded the React app; **screen ① is wired** (source → `/practice/next`,
+  MathJax problem card, native whiteboard, targeted practice, 3 actions). Screens ②–⑤ are honest
+  stubs that name their endpoints; the real interactions land in **v0.4.1a → v0.4.4a**.
 - **Reuses** today's endpoints (`/practice/next`, `/recognize`, `/verify`, `/claude/chat`,
   `/analyze`, `/animate`); **adds** `/recognize/models`, `/work/*` (personal draft DB,
   `workspace.py`), `/assistant/analyze` + `/assistant/ask` (`assistant.py`), and a phased real
   Manim render (`/manim/render`).
-- **Migration rule**: before any full rewrite, the old file is archived to the nearest
-  `legacy/` (e.g. `web/legacy/demo_standalone.v0.2.html`) — never deleted.
+- **Migration rule**: before any full rewrite, the old files are archived (never deleted) —
+  the static pages now live under [`web/legacyweb/`](web/legacyweb/).
 
 ## Notes & known issues
 - **OCR / exam generation can be slow (20–50s+)** — the shared gateway is latency-prone;

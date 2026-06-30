@@ -1,0 +1,986 @@
+        :root {
+            --bg-deep: #0f172a;
+            --accent-blue: #38bdf8;
+            --accent-purple: #818cf8;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f1f5f9;
+            --text-dim: #94a3b8;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top left, #1e293b, var(--bg-deep));
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            margin: 0;
+            min-height: 100vh;
+        }
+
+        h1 {
+            font-weight: 600;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-weight: 300;
+            color: var(--text-dim);
+            margin-bottom: 40px;
+        }
+
+        .page-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            max-width: 1400px;
+            width: 95%;
+            align-items: stretch;
+        }
+
+        .container {
+            display: flex;
+            gap: 30px;
+            width: 100%;
+            perspective: 1000px;
+            align-items: flex-start;
+        }
+
+        /* Random problem card */
+        .problem-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 28px 32px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .problem-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .problem-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .problem-topic,
+        .problem-difficulty {
+            font-size: 0.72rem;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .problem-topic {
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            color: var(--accent-blue);
+        }
+
+        /* Neutral default so non-easy/medium/hard labels (e.g. 练习) still read well. */
+        .problem-difficulty {
+            background: rgba(148, 163, 184, 0.12);
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            color: #cbd5e1;
+        }
+
+        /* Practice-feed chips: where the question came from + its tags. */
+        .problem-source {
+            font-size: 0.72rem; padding: 4px 11px; border-radius: 20px; font-weight: 600;
+            background: rgba(129, 140, 248, 0.15); border: 1px solid rgba(129, 140, 248, 0.3); color: #c7d2fe;
+        }
+        .problem-tag {
+            font-size: 0.72rem; padding: 3px 10px; border-radius: 20px;
+            background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); color: #bae6fd;
+        }
+        .problem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .problem-actions button:disabled { opacity: 0.55; cursor: progress; }
+        /* Logic-thinking-type chips stand out from knowledge-point chips. */
+        .problem-tag.logic {
+            background: rgba(167, 139, 250, 0.15); border-color: rgba(167, 139, 250, 0.4);
+            color: #ddd6fe; font-weight: 600;
+        }
+        /* Targeted-practice controls: pick a logic type + difficulty, then generate. */
+        .practice-controls {
+            display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+            margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--glass-border);
+        }
+        .pc-label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+        .pc-select {
+            background: rgba(255, 255, 255, 0.06); border: 1px solid var(--glass-border);
+            color: #e5e7eb; border-radius: 8px; padding: 5px 9px; font-size: 0.85rem;
+        }
+
+        .difficulty-easy {
+            background: rgba(52, 211, 153, 0.1);
+            border: 1px solid rgba(52, 211, 153, 0.25);
+            color: #34d399;
+        }
+
+        .difficulty-medium {
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.25);
+            color: #fbbf24;
+        }
+
+        .difficulty-hard {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid rgba(248, 113, 113, 0.25);
+            color: #f87171;
+        }
+
+        .problem-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-main);
+        }
+
+        .problem-statement {
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            line-height: 1.5;
+            margin: 0;
+        }
+
+        .problem-latex {
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            text-align: center;
+            font-size: 1.2rem;
+            color: var(--text-main);
+            overflow-x: auto;
+        }
+
+        .problem-hint-line {
+            font-size: 0.82rem;
+            color: var(--text-dim);
+            font-style: italic;
+            margin: 0;
+        }
+
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 20px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #canvas-container {
+            border-radius: 16px;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            /* Keep white for drawing contrast */
+            width: 100%;
+            max-width: 800px;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* Board-engine selector row (Original Whiteboard vs Excalidraw) */
+        .board-mode-row {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .board-mode-label {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .board-mode-select {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .board-mode-select:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .board-mode-select option {
+            background: #1e293b;
+            color: var(--text-main);
+        }
+
+        .board-fullscreen-btn {
+            margin-left: auto;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 8px 14px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .board-fullscreen-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
+            border-color: var(--accent-blue);
+        }
+
+        /* ── Fullscreen whiteboard ──────────────────────────────────────────
+           When #canvas-wrapper enters the Fullscreen API, fill the screen and
+           let the active board engine grow to use all the available space. */
+        #canvas-wrapper:fullscreen {
+            justify-content: flex-start;
+            border-radius: 0;
+            padding: 16px 24px;
+            box-sizing: border-box;
+        }
+
+        #canvas-wrapper:fullscreen .board-mode-row,
+        #canvas-wrapper:fullscreen #canvas-container,
+        #canvas-wrapper:fullscreen #excalidraw-container {
+            max-width: none;
+        }
+
+        /* Native canvas keeps its 4:3 ratio but grows to fill the height. */
+        #canvas-wrapper:fullscreen #canvas-container {
+            flex: 1;
+            min-height: 0;
+            width: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #canvas-wrapper:fullscreen #canvas-container canvas {
+            max-height: 100%;
+            max-width: 100%;
+            width: auto !important;
+            height: auto !important;
+            object-fit: contain;
+        }
+
+        /* Excalidraw expands to fill all remaining vertical space. */
+        #canvas-wrapper:fullscreen #excalidraw-container {
+            flex: 1;
+            height: auto;
+            min-height: 0;
+        }
+
+        /* Excalidraw host. Fixed height so the React editor has room; white
+           background matches the drawing surface. */
+        #excalidraw-container {
+            width: 100%;
+            max-width: 800px;
+            height: 600px;
+            border-radius: 16px;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .excalidraw-error {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 24px;
+            text-align: center;
+            color: #b91c1c;
+            font-size: 0.95rem;
+        }
+
+        /* Blank hint board that replaces the whiteboard once "Next Hint" is used */
+        #hint-board {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            max-width: 800px;
+            min-height: 600px;
+            background: white;
+            color: #1a1a2e;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            padding: 30px 35px;
+            box-sizing: border-box;
+        }
+
+        #hint-board h3 {
+            margin: 0 0 4px 0;
+            font-size: 1.4rem;
+        }
+
+        #hint-board .hint-board-sub {
+            margin: 0 0 20px 0;
+            color: #666;
+            font-size: 0.95rem;
+        }
+
+        #hint-board-list .hint-board-item {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 14px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 1.05rem;
+            line-height: 1.5;
+            animation: hintFadeIn 0.35s ease;
+        }
+
+        #hint-board-list .hint-board-num {
+            font-weight: 700;
+            color: var(--accent-purple);
+            flex-shrink: 0;
+        }
+
+        @keyframes hintFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Blank AI chat board — shares the hint board's look (white card). */
+        #ai-board {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            max-width: 800px;
+            min-height: 600px;
+            background: white;
+            color: #1a1a2e;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            padding: 30px 35px;
+            box-sizing: border-box;
+        }
+
+        #ai-board h3 {
+            margin: 0 0 4px 0;
+            font-size: 1.4rem;
+        }
+
+        /* "Part A / Part B" section dividers */
+        .ai-part-label {
+            margin: 22px 0 6px 0;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--accent-purple);
+        }
+
+        /* Analysis cards reuse the hint item look. */
+        #ai-analysis-list .hint-board-item,
+        #ai-chat-list .ai-msg {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 14px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 1.05rem;
+            line-height: 1.5;
+            animation: hintFadeIn 0.35s ease;
+        }
+
+        #ai-analysis-list .hint-board-num,
+        #ai-chat-list .ai-msg-who {
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        #ai-analysis-list .hint-board-num {
+            color: var(--accent-purple);
+        }
+
+        /* Student messages vs AI replies get different speaker colours. */
+        #ai-chat-list .ai-msg.from-user .ai-msg-who {
+            color: #2563eb;
+        }
+
+        #ai-chat-list .ai-msg.from-ai .ai-msg-who {
+            color: #7c3aed;
+        }
+
+        .ai-chat-input-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+        }
+
+        .ai-chat-input {
+            flex: 1;
+            background: #f5f6fb;
+            border: 1px solid #e0e3f0;
+            color: #1a1a2e;
+            padding: 12px 14px;
+            border-radius: 10px;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.95rem;
+        }
+
+        .ai-chat-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+
+        .ai-chat-send {
+            width: auto;
+            padding: 12px 20px;
+        }
+
+        /* AI model picker row (top of the AI Response board) */
+        .ai-model-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 4px 0 14px;
+        }
+        .ai-model-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #555;
+        }
+        .ai-model-select {
+            padding: 7px 12px;
+            border: 1px solid #cfd6e4;
+            border-radius: 10px;
+            background: #fff;
+            color: #1f2937;
+            font-family: inherit;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .ai-model-select:focus {
+            outline: none;
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+        }
+        .ai-provider-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+        .ai-provider-badge.is-claude {
+            background: #e0e7ff;
+            color: #4338ca;
+        }
+        .ai-provider-badge.is-template {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        /* Math-To-Manim animation section (rendered after the last hint) */
+        .manim-section {
+            margin-top: 26px;
+            padding-top: 22px;
+            border-top: 2px dashed #ddd;
+            animation: hintFadeIn 0.4s ease;
+        }
+
+        .manim-loading {
+            color: #555;
+            font-size: 1rem;
+        }
+
+        .manim-title {
+            margin: 0 0 14px 0;
+            font-size: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .manim-badge {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: white;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            padding: 3px 9px;
+            border-radius: 999px;
+        }
+
+        .anim-stage {
+            background: #0f1020;
+            border-radius: 14px;
+            min-height: 170px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            padding: 24px;
+            box-shadow: inset 0 2px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        .anim-frame {
+            color: #fff;
+            font-size: 1.5rem;
+            transition: opacity 0.25s ease;
+            text-align: center;
+        }
+
+        .anim-caption {
+            color: #8ab4ff;
+            font-size: 0.95rem;
+            transition: opacity 0.25s ease;
+            text-align: center;
+        }
+
+        /* The card hugs the canvas's rendered width (driven by the canvas's
+           intrinsic 560px, shrinking on small screens). The banner then fills
+           that width at 100%, so the two always share the same edge — no magic
+           numbers duplicated between them. */
+        .plot-card {
+            width: fit-content;
+            max-width: 100%;
+        }
+
+        .plot-eq {
+            color: #fff;
+            background: #0f1020;
+            border-radius: 14px 14px 0 0;
+            text-align: center;
+            padding: 14px 10px 4px;
+            font-size: 1.15rem;
+            box-sizing: border-box;
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        .sympy-canvas {
+            display: block;
+            width: auto;
+            max-width: 100%;
+            height: auto;
+            background: #0f1020;
+            border-radius: 0 0 14px 14px;
+            box-shadow: inset 0 2px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        .anim-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .anim-btn {
+            background: #f0f2ff;
+            border: 1px solid #d3d9ff;
+            color: #3a3a6a;
+            padding: 8px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.9rem;
+            transition: all 0.15s ease;
+        }
+
+        .anim-btn:hover {
+            background: #e2e7ff;
+            border-color: var(--accent-blue);
+        }
+
+        .manim-code {
+            margin-top: 14px;
+            background: #1a1b2e;
+            color: #d6deff;
+            padding: 18px;
+            border-radius: 12px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 0.82rem;
+            line-height: 1.45;
+            overflow-x: auto;
+            white-space: pre;
+            max-height: 320px;
+            overflow-y: auto;
+        }
+
+        /* Scale the canvas to its container width; height:auto keeps the
+           canvas's intrinsic 4:3 ratio. This scales the board as one piece
+           instead of overflowing & being clipped — every part stays drawable. */
+        #canvas-container canvas {
+            width: 100% !important;
+            height: auto !important;
+        }
+
+        /* Whiteboard toolbar */
+        .board-tools {
+            margin-top: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .tool-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            color: var(--text-dim);
+            padding: 8px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        .tool-btn:hover {
+            color: white;
+            border-color: var(--accent-blue);
+        }
+
+        .tool-btn.active {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: white;
+            border-color: transparent;
+        }
+
+        .eraser-size {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+
+        .eraser-size input[type="range"] {
+            width: 110px;
+            accent-color: var(--accent-blue);
+        }
+
+        .sidebar {
+            flex: 0 0 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .control-group h3 {
+            margin-top: 0;
+            font-size: 1.1rem;
+            color: var(--accent-blue);
+        }
+
+        input[type="text"] {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--glass-border);
+            color: white;
+            padding: 15px;
+            border-radius: 12px;
+            width: 100%;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+
+        .method-select {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--glass-border);
+            color: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .method-select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+
+        /* Make the dropdown list itself readable (native menus ignore most CSS). */
+        .method-select option {
+            background: var(--bg-deep);
+            color: white;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border: none;
+            color: white;
+            padding: 15px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+            box-shadow: 0 10px 15px -3px rgba(56, 189, 248, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            color: var(--text-dim);
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .btn-secondary:hover {
+            background: var(--glass-border);
+            color: white;
+        }
+
+        /* "Hints & Progress" return button — tinted to stand out from Clear Board. */
+        .return-hints-btn {
+            border-color: rgba(56, 189, 248, 0.5);
+            color: var(--accent-blue);
+        }
+
+        .return-hints-btn:hover {
+            background: rgba(56, 189, 248, 0.15);
+            color: #fff;
+        }
+
+        /* "Submit" — compact primary button that fits inline in the toolbar. */
+        .submit-board-btn {
+            width: auto;
+            padding: 8px 18px;
+        }
+
+        .submit-board-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* OCR progress readout below the whiteboard toolbar. */
+        .ocr-progress {
+            margin-top: 14px;
+            width: 100%;
+            max-width: 800px;
+            font-size: 0.88rem;
+            color: var(--accent-blue);
+            letter-spacing: 0.02em;
+        }
+
+        .ocr-progress .ocr-bar-track {
+            margin-top: 8px;
+            height: 6px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .ocr-progress .ocr-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 999px;
+            transition: width 0.2s ease;
+        }
+
+        .voice-btn {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 10px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .voice-btn:hover {
+            background: rgba(220, 53, 69, 0.1);
+            border-color: #ef4444;
+        }
+
+        .result-box {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            border-left: 4px solid var(--accent-blue);
+            margin-top: 10px;
+            animation: slideUp 0.5s ease-out;
+        }
+
+        .step-item {
+            font-size: 0.95rem;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .step-num {
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .loading-msg {
+            color: var(--accent-blue);
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        /* Exam mode — pagination nav that replaces the "New Problem" button. */
+        .exam-nav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .exam-counter { color: var(--text-dim); font-size: 0.9rem; min-width: 58px; text-align: center; }
+        .exam-nav .btn-secondary:disabled { opacity: 0.4; cursor: default; }
+
+        /* Exam mode — hidden knowledge-point tags, revealed by a button. */
+        .exam-tags-wrap { margin-top: 14px; }
+        .exam-tags-panel {
+            margin-top: 12px; padding: 14px 16px; border-radius: 12px;
+            background: rgba(0, 0, 0, 0.2); border-left: 3px solid var(--accent-blue);
+        }
+        .exam-dim { margin: 6px 0; }
+        .exam-dim-name { font-size: 0.78rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+        .exam-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+        .exam-chip {
+            font-size: 0.85rem; padding: 5px 12px; border-radius: 999px;
+            background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.25); color: #bae6fd;
+        }
+        .exam-chip.primary { background: rgba(129, 140, 248, 0.18); border-color: rgba(129, 140, 248, 0.4); color: #c7d2fe; font-weight: 600; }
+        .exam-chip.empty { background: transparent; border-color: var(--glass-border); color: var(--text-dim); font-style: italic; }
+
+        /* ── v0.3 screen router ───────────────────────────────────────────
+           Each <section class="screen"> is one of the five guided-flow
+           screens; only the .active one is visible. Layout/labels are driven
+           by JS config (SCREEN_DEFS / SOURCES / PROBLEM_ACTIONS), so the flow
+           is changeable in one place rather than hardcoded per screen. */
+        .screen { display: none; flex-direction: column; gap: 30px; width: 100%; }
+        .screen.active { display: flex; }
+        .screen-nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .screen-title { margin: 0; font-size: 1.5rem; font-weight: 600;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .screen-sub { color: var(--text-dim); font-weight: 300; margin: -18px 0 0; font-size: 0.92rem; }
+        .screen-back-btn { white-space: nowrap; }
+        .screen-body { display: flex; flex-direction: column; gap: 20px; }
+        .screen-stub {
+            background: var(--glass-bg); border: 1px dashed var(--glass-border);
+            border-radius: 20px; padding: 28px 32px; display: flex; flex-direction: column; gap: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+        }
+        .screen-stub-tag { color: var(--accent-purple); font-size: 0.85rem; margin: 0; }
+        .screen-stub p { margin: 0; color: var(--text-main); line-height: 1.6; }
+        .stub-toolbar, .stub-actionbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .stub-actionbar { justify-content: space-between; border-top: 1px solid var(--glass-border); padding-top: 16px; }
+        .stub-board {
+            border: 1px solid var(--glass-border); border-radius: 14px; padding: 18px;
+            background: rgba(0, 0, 0, 0.18); min-height: 80px; color: var(--text-dim); font-family: monospace;
+        }
+        .assist-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+            border: 1px solid var(--glass-border); border-radius: 14px; overflow: hidden; }
+        .assist-cols .col-head { padding: 10px 14px; font-weight: 600; background: rgba(255, 255, 255, 0.04);
+            border-bottom: 1px solid var(--glass-border); }
+        .assist-cols .col-right { border-left: 1px solid var(--glass-border); }
+        .assist-cols .col-cell { padding: 10px 14px; border-bottom: 1px solid var(--glass-border); min-height: 24px; }
+        .assist-cols .col-cell.empty { color: var(--text-dim); font-style: italic; }
+
+        /* problem-screen v0.3 additions: source picker, tags toggle, 3-action row */
+        .problem-source-row {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--glass-border);
+        }
+        .problem-row-label { font-size: 0.95rem; font-weight: 600; color: var(--text-main); letter-spacing: 0.02em; }
+        .problem-row-spacer { flex: 1 1 auto; }
+        .problem-source-row .pc-label { font-weight: 500; color: var(--text-main); }
+        /* compact pill button (tags toggle) — distinct from the big action buttons */
+        .chip-btn {
+            background: rgba(56, 189, 248, 0.10); border: 1px solid rgba(56, 189, 248, 0.30);
+            color: var(--accent-blue); border-radius: 999px; padding: 5px 14px;
+            font-size: 0.82rem; font-family: 'Outfit', sans-serif; cursor: pointer; transition: all 0.2s ease;
+        }
+        .chip-btn:hover { background: rgba(56, 189, 248, 0.18); }
+        .problem-action-row { display: flex; gap: 14px; flex-wrap: wrap; }
+        .problem-action-row > button { flex: 1; min-width: 200px; }
+        .problem-meta.tags-hidden .problem-tag,
+        .problem-meta.tags-hidden .problem-source { display: none; }
+
+/* ── App shell (React mount point) ───────────────────────────────────────────
+   The legacy page centered its content via <body>; the React app renders
+   everything inside #root, so mirror that column-centered layout here. */
+#root {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}

@@ -11,6 +11,38 @@
 
 ---
 
+## v0.4.0a — 学生端前端「重平台化」：静态 HTML → Vite + React + TS（`frontend/`）
+
+按用户定向（2026-06-30：「改为动态页面！直接重构！…html 过时了且不方便维护，改为 nodejs 维护，
+旧的页面移动到 web/legacyweb」）把学生端核心 tutor 从单页静态 HTML 迁到 **Node 构建的 React 工程**。
+属**大迭代 +1**（新增前端构建子系统）。**后端零改动**——共识判分 `reasoner.py`、诊断、标签自进化、
+记忆全部保留，React 仅经 HTTP 调用（CORS 已开）。技术栈经 AskUserQuestion 选定：**Vite + React + TS**。
+
+- **新工程 `frontend/`（用户定向「前端构建在 frontend」）**：`package.json`/`vite.config.ts`/`tsconfig`/
+  `index.html` + `src/`。`npm run dev` 起 Vite 开发服务器（:5173，含 `/api` 代理）；`npm run build` →
+  `dist/` 静态资源。`VITE_API_BASE` 可改后端地址（默认 `http://localhost:8000`）。
+- **配置驱动（落实「动态、可改、不要死成 html」）**：`SCREEN_DEFS`/`SOURCES`/`PROBLEM_ACTIONS` 落为
+  **类型化配置模块**（`src/config.ts`）；五屏路由 + 返回栈为 React 状态（`src/store.tsx`：`navTo/navBack/
+  navHome/startWorkFlow`）。
+- **白板引擎忠实移植**（`src/board/BoardEngine.ts`）：原生 `<canvas>` 的 `strokes[]`
+  （`{mode:'pen',weight,points} | {mode:'erasePixels',radius,points}`）、指针 down/move/up、笔 / 区域擦 /
+  整笔擦、live 预览、`repaint`、PNG 导出 —— 与旧引擎逐行对齐。引擎实例常驻 store，画布元素随屏挂载/脱离
+  以**跨屏保留笔迹**（为 v0.4.1a 选区屏铺路）。
+- **题目屏接线**（`ProblemScreen` + `ProblemCard` + `PracticeControls` + `Whiteboard`）：来源下拉
+  （1 AI / 2 学科网 / 3 题库 → `/practice/next?source=`）、🏷 标签开关（默认隐藏）、MathJax 题面、
+  🎯 按思维类型 / 难度出题（`/tags/catalogue` + 开放难度梯）、🎲 换一题、底部三动作（提交·二次确认 /
+  提问 / AI 助手）。
+- **屏 ②–⑤ 为诚实占位**（命名将调端点）：选区 `/recognize`、校对 `/work/save`+`/verify`、助手
+  `/assistant/analyze`+`/assistant/ask`、答疑 `/analyze`+`/claude/chat`；真交互在 v0.4.1a→v0.4.4a 落地
+  （对应原 v0.3.1a–v0.3.4a 计划）。Excalidraw 第二引擎本步先禁用（需 Vite 专门配置），下个版本恢复；
+  原生引擎完整可用。
+- **旧静态站归档**：`web/{index,signin,signup,demo_sellection,demo_exam,demo_standalone}.html` **整组**
+  `git mv` 到 `web/legacyweb/`（彼此相对链接保持可用、可独立运行；不删除，遵迁移规则）。其余页（登录 /
+  选题 / 批量考试）后续增量迁移到 `frontend/`。
+- **验收（运行—观测）**：`npm install`（68 包）→ `tsc --noEmit` 0 错 → `vite build` 成功（46 模块、
+  `dist/` 产出）→ `vite preview` 200；**真链路** headless Chrome 渲染：React 挂载、`/practice/next` 拉到
+  真题（标题「化归转化」非加载占位）、白板 / canvas / 三动作渲染、思维类型下拉由 `/tags/catalogue` 填充。
+
 ## v0.3.0b — 题目屏清理（用户反馈）：移除旧「Solve with Voice or Text」侧栏 + 去重 AI 出题 + 来源样式
 
 按用户反馈精修题目屏，使其贴近线框图 ①（`docs/DEVELOPMENT_PLAN.md` §C₀）。仅前端、不动后端：
