@@ -11,6 +11,31 @@
 
 ---
 
+## v0.3.0a — 学生端「试卷测试」多屏重构（第 1 步）：五屏路由骨架 + 配置驱动题目屏
+
+启动 v0.3 学生端主链路 UX 大改（大迭代 +1）。本步**只搭骨架、不动内核**：共识判分 /
+苏式护栏 / 诊断 / 记忆 / 标签自进化一律保留。详见 `docs/DEVELOPMENT_PLAN.md`
+§「v0.3 学生端『试卷测试』多屏交互重构」§G·v0.3.0a。
+
+- **legacy 备份（§F 第 0 步）**：整体改写前先把当前页复制到
+  `web/legacy/demo_standalone.v0.2.html`（只读、非生产路径，**不删除**）。
+- **五屏路由骨架（`web/demo_standalone.html`）**：单页改造为 5 个 `<section class="screen">`
+  （`#screen-problem / -select / -check / -assistant / -ask`），仅 `.active` 可见；新增通用
+  路由 `navTo / navBack / navHome` + **返回栈**（验收：五屏可互跳、返回栈正确）。
+- **配置驱动（落实用户「动态前端、可更改、不要死成 html」）**：屏幕 / 来源 / 动作分别由
+  `SCREEN_DEFS`、`SOURCES`、`PROBLEM_ACTIONS` 配置表驱动；屏 2–5 的页面体由
+  `renderSelectScreen / renderCheckScreen / renderAssistantScreen / renderAskScreen` 在进屏时
+  **动态生成**（非手写静态标签），改流程只需改配置。
+- **题目屏接线（C1）**：① 出题来源下拉（1 AI 生成 / 2 学科网 / 3 题库）→ 直接映射
+  `GET /practice/next?source=ai|xueke|bank`（`loadProblem` 增 `source` 透传，默认 `bank`，
+  开机不触发 AI 调用）；②「🏷 显示标签」开关（默认隐藏知识点 / 思维类型标签，点按显隐）；
+  ③ 底部三动作行：`提交`（二次确认）/ `提问·不会做` / `AI 助手`，按 §B 桩接路由
+  （提交·助手 → 选区屏，提问 → 答疑屏）。
+- **屏 2–5 为诚实占位**：各自标注将调用的端点（`/recognize`、`/work/save`、`/verify`、
+  `/assistant/analyze`、`/analyze`、`/claude/chat`），交互在 v0.3.1a→v0.3.4a 逐步落地。
+- **不回归**：原白板 / 双引擎 / 全屏 / 出题 / 练习控制 / 考试模式（`?exam=1`）全部保留可用；
+  4 段内联 `<script>` 语法校验通过（`node new Function` 0 错）。
+
 ## v0.2.5a — 核心后端三管线架构补全：学科网题源 + 题号规范 + AI 免责声明 + 笔画直传 AI
 
 把用户的「核心后端架构」草图补全并落地为可运行增量（出题 / 作答 / AI 反馈三管线）。

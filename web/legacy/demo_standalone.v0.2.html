@@ -940,48 +940,6 @@
         }
         .exam-chip.primary { background: rgba(129, 140, 248, 0.18); border-color: rgba(129, 140, 248, 0.4); color: #c7d2fe; font-weight: 600; }
         .exam-chip.empty { background: transparent; border-color: var(--glass-border); color: var(--text-dim); font-style: italic; }
-
-        /* ── v0.3 screen router ───────────────────────────────────────────
-           Each <section class="screen"> is one of the five guided-flow
-           screens; only the .active one is visible. Layout/labels are driven
-           by JS config (SCREEN_DEFS / SOURCES / PROBLEM_ACTIONS), so the flow
-           is changeable in one place rather than hardcoded per screen. */
-        .screen { display: none; flex-direction: column; gap: 30px; width: 100%; }
-        .screen.active { display: flex; }
-        .screen-nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-        .screen-title { margin: 0; font-size: 1.5rem; font-weight: 600;
-            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
-            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .screen-sub { color: var(--text-dim); font-weight: 300; margin: -18px 0 0; font-size: 0.92rem; }
-        .screen-back-btn { white-space: nowrap; }
-        .screen-body { display: flex; flex-direction: column; gap: 20px; }
-        .screen-stub {
-            background: var(--glass-bg); border: 1px dashed var(--glass-border);
-            border-radius: 20px; padding: 28px 32px; display: flex; flex-direction: column; gap: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-        }
-        .screen-stub-tag { color: var(--accent-purple); font-size: 0.85rem; margin: 0; }
-        .screen-stub p { margin: 0; color: var(--text-main); line-height: 1.6; }
-        .stub-toolbar, .stub-actionbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-        .stub-actionbar { justify-content: space-between; border-top: 1px solid var(--glass-border); padding-top: 16px; }
-        .stub-board {
-            border: 1px solid var(--glass-border); border-radius: 14px; padding: 18px;
-            background: rgba(0, 0, 0, 0.18); min-height: 80px; color: var(--text-dim); font-family: monospace;
-        }
-        .assist-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-            border: 1px solid var(--glass-border); border-radius: 14px; overflow: hidden; }
-        .assist-cols .col-head { padding: 10px 14px; font-weight: 600; background: rgba(255, 255, 255, 0.04);
-            border-bottom: 1px solid var(--glass-border); }
-        .assist-cols .col-right { border-left: 1px solid var(--glass-border); }
-        .assist-cols .col-cell { padding: 10px 14px; border-bottom: 1px solid var(--glass-border); min-height: 24px; }
-        .assist-cols .col-cell.empty { color: var(--text-dim); font-style: italic; }
-
-        /* problem-screen v0.3 additions: source picker, tags toggle, 3-action row */
-        .problem-source-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
-        .problem-action-row { display: flex; gap: 14px; flex-wrap: wrap; }
-        .problem-action-row > button { flex: 1; min-width: 200px; }
-        .problem-meta.tags-hidden .problem-tag,
-        .problem-meta.tags-hidden .problem-source { display: none; }
     </style>
 </head>
 
@@ -993,30 +951,14 @@
     <div id="loading" class="loading-msg">Initializing Drawing Engine...</div>
 
     <div id="main-ui" class="page-wrap" style="display:none;">
-
-        <!-- ─────────────────────────────────────────────────────────────
-             v0.3 screen router. Each <section class="screen"> is one of the
-             five guided-flow screens; only .active is visible. Screens 2–5
-             are rendered dynamically from JS config (SCREEN_DEFS / render*),
-             so the flow is changeable in one place, not baked into the HTML.
-             ───────────────────────────────────────────────────────────── -->
-        <section id="screen-problem" class="screen active">
         <!-- Random problem to solve -->
         <div id="problem-card" class="problem-card">
             <div class="problem-card-top">
-                <div id="problem-meta" class="problem-meta tags-hidden"></div>
+                <div id="problem-meta" class="problem-meta"></div>
                 <div class="problem-actions">
                     <button class="btn-secondary problem-refresh" onclick="loadProblem()" title="从题库换一道题">🎲 换一题</button>
                     <button class="btn-secondary" id="ai-gen-btn" onclick="loadProblem(true)" title="让 AI 现场出一道新题">✨ AI 出题</button>
                 </div>
-            </div>
-            <!-- v0.3: tags toggle (hidden by default) + 出题来源 picker (populated from SOURCES). -->
-            <div class="problem-source-row">
-                <button id="tags-toggle-btn" class="btn-secondary" onclick="toggleProblemTags()"
-                    title="显示 / 隐藏本题的知识点与思维类型标签">🏷 显示标签</button>
-                <label class="pc-label">出题来源
-                    <select id="source-select" class="pc-select" onchange="onSourceChange(this.value)"></select>
-                </label>
             </div>
             <h2 id="problem-title" class="problem-title">正在加载题目…</h2>
             <p id="problem-statement" class="problem-statement"></p>
@@ -1146,17 +1088,6 @@
                 <div id="result" style="display:none;" class="result-box"></div>
             </div>
         </div>
-
-            <!-- v0.3 bottom action row — three guided-flow actions, rendered
-                 from PROBLEM_ACTIONS config so they stay changeable. -->
-            <div id="problem-action-row" class="problem-action-row"></div>
-        </section><!-- /#screen-problem -->
-
-        <!-- Screens 2–5: empty shells; bodies are rendered by render* on entry. -->
-        <section id="screen-select"    class="screen"></section>
-        <section id="screen-check"     class="screen"></section>
-        <section id="screen-assistant" class="screen"></section>
-        <section id="screen-ask"       class="screen"></section>
     </div>
 
     <script>
@@ -2482,10 +2413,6 @@
                 if (generate) url.searchParams.set('generate', '1');
                 if (focusLogic) url.searchParams.set('focus_logic', focusLogic);
                 if (difficulty) url.searchParams.set('difficulty', difficulty);
-                // v0.3 出题来源 picker: bank = default; xueke routes to the 学科网 API.
-                if (!generate && window.selectedSource && window.selectedSource !== 'bank') {
-                    url.searchParams.set('source', window.selectedSource);
-                }
 
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -2677,199 +2604,12 @@
         }
     </script>
 
-    <!-- ── v0.3 screen router + dynamic screen config ───────────────────────
-         The five-screen guided flow is data-driven: SCREEN_DEFS describes each
-         screen, SOURCES the 出题来源 picker, PROBLEM_ACTIONS the bottom action
-         row. Screens 2–5 are (re)rendered by render<Screen>() on entry, so the
-         flow can be changed by editing config here rather than editing markup.
-         v0.3.0a wires navigation + the problem screen; screens 2–5 are honest
-         stubs that name the endpoint each will call (filled in v0.3.1a→v0.3.4a).
-         ──────────────────────────────────────────────────────────────────── -->
-    <script>
-        // ── Screen registry ──────────────────────────────────────────────
-        // id ↔ <section> ; title/sub render the header; render() builds the body.
-        const SCREEN_DEFS = {
-            problem:   { id: 'screen-problem',   title: 'AI-based math tutor' },
-            select:    { id: 'screen-select',    title: '选择要提交的内容', sub: '框选要发送给 OCR 的笔画', render: renderSelectScreen },
-            check:     { id: 'screen-check',     title: 'AI math tutor',     sub: '核对识别结果后再提交', render: renderCheckScreen },
-            assistant: { id: 'screen-assistant', title: 'AI assistant',      sub: '逐行看看你的解法',     render: renderAssistantScreen },
-            ask:       { id: 'screen-ask',       title: 'Q&A',               sub: '就这道题随便问',       render: renderAskScreen },
-        };
-
-        // 出题来源 picker → maps 1:1 to GET /practice/next?source= (all already supported).
-        const SOURCES = [
-            { value: 'ai',    label: '1 · AI 生成',   generate: true  },
-            { value: 'bank',  label: '3 · 后台题库',  generate: false },
-            { value: 'xueke', label: '2 · 学科网 API', generate: false },
-        ];
-
-        // Bottom action row on the problem screen. flow = which path the
-        // select→check screens lead to afterward (submit grades, assist analyses).
-        const PROBLEM_ACTIONS = [
-            { label: '📤 提交', cls: 'btn-primary',  confirm: '确认已完成作答并提交？（未完成也可提交）', go: () => startWorkFlow('submit') },
-            { label: '🙋 提问 / 不会做', cls: 'btn-secondary', go: () => navTo('ask') },
-            { label: '🤖 AI 助手（求助＝同时提交）', cls: 'btn-secondary', go: () => startWorkFlow('assist') },
-        ];
-
-        // ── Router state ─────────────────────────────────────────────────
-        let currentScreen = 'problem';
-        const navStack = [];            // back-stack of screen ids
-        let workFlow = null;            // 'submit' | 'assist' — set when leaving the problem screen
-
-        // Navigate to a screen, pushing the current one onto the back-stack.
-        function navTo(name, opts) {
-            const def = SCREEN_DEFS[name];
-            if (!def) { console.warn('unknown screen', name); return; }
-            if (name !== currentScreen) navStack.push(currentScreen);
-            showScreen(name, opts);
-        }
-
-        // Go back to the previous screen (no-op stack-wise if already at root).
-        function navBack() {
-            const prev = navStack.pop() || 'problem';
-            showScreen(prev);
-        }
-
-        // Reset to the problem screen and clear the back-stack (end of a flow).
-        function navHome() {
-            navStack.length = 0;
-            workFlow = null;
-            showScreen('problem');
-        }
-
-        // Reveal one screen, hide the rest, and (re)render dynamic bodies.
-        function showScreen(name, opts) {
-            const def = SCREEN_DEFS[name];
-            Object.values(SCREEN_DEFS).forEach(d => {
-                document.getElementById(d.id).classList.toggle('active', d.id === def.id);
-            });
-            currentScreen = name;
-            if (def.render) def.render(def, opts || {});
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-
-        // Shared header for the dynamic screens (back button + title + subtitle).
-        function screenHeader(def) {
-            return `<div class="screen-nav">` +
-                `<button class="btn-secondary screen-back-btn" onclick="navBack()">← 返回</button>` +
-                `<h2 class="screen-title">${def.title}</h2>` +
-                `</div>` +
-                (def.sub ? `<p class="screen-sub">${def.sub}</p>` : '');
-        }
-
-        // ── Problem-screen wiring (source picker, tags toggle, actions) ──
-        function initProblemScreen() {
-            const sel = document.getElementById('source-select');
-            if (sel) {
-                SOURCES.forEach(s => sel.add(new Option(s.label, s.value)));
-                // Boot pulls a bank problem (no surprise AI call), so reflect that.
-                sel.value = 'bank';
-                window.selectedSource = 'bank';
-            }
-            const row = document.getElementById('problem-action-row');
-            if (row) {
-                row.innerHTML = '';
-                PROBLEM_ACTIONS.forEach(a => {
-                    const b = document.createElement('button');
-                    b.className = a.cls;
-                    b.textContent = a.label;
-                    b.onclick = () => { if (!a.confirm || confirm(a.confirm)) a.go(); };
-                    row.appendChild(b);
-                });
-            }
-        }
-
-        // 出题来源 dropdown → reuse loadProblem (source=ai generates; bank/xueke pull).
-        function onSourceChange(value) {
-            const src = SOURCES.find(s => s.value === value);
-            if (!src) return;
-            window.selectedSource = value;
-            // bank/xueke pull existing questions; ai generates a fresh one.
-            loadProblem(!!src.generate);
-        }
-
-        // 🏷 toggle: show/hide the knowledge-point + logic-type tag chips.
-        function toggleProblemTags() {
-            const meta = document.getElementById('problem-meta');
-            const btn = document.getElementById('tags-toggle-btn');
-            if (!meta) return;
-            const hidden = meta.classList.toggle('tags-hidden');
-            if (btn) btn.textContent = hidden ? '🏷 显示标签' : '🏷 隐藏标签';
-        }
-
-        // 提交 / AI 助手 both route through 选区 → 校对; flow decides the destination
-        // after 校对. v0.3.0a stubs the screens; the real OCR/grading lands later.
-        function startWorkFlow(flow) {
-            workFlow = flow;
-            navTo('select');
-        }
-
-        // ── Dynamic screen bodies (honest v0.3.0a stubs) ─────────────────
-        // Each names the endpoint(s) it will call so the flow is legible now and
-        // the markup is generated (not hand-written) per the "dynamic frontend" ask.
-        function renderSelectScreen(def) {
-            const sec = document.getElementById(def.id);
-            sec.innerHTML = screenHeader(def) +
-                `<div class="screen-body"><div class="screen-stub">` +
-                `<p class="screen-stub-tag">② 选区屏 · v0.3.1a 落地</p>` +
-                `<p>在白板上框选要提交的笔画（四角句柄改大小），仅导出选中区域为 PNG。</p>` +
-                `<div class="stub-toolbar"><button class="btn-secondary" disabled>套索</button>` +
-                `<button class="btn-secondary" disabled>矩形</button>` +
-                `<label class="pc-label">OCR 模型<select class="pc-select" disabled><option>1 · nex</option></select></label></div>` +
-                `<div class="stub-actionbar">` +
-                `<span style="color:var(--text-dim);">flow = <b>${workFlow || '—'}</b> · 将 POST /recognize</span>` +
-                `<button class="btn-primary" onclick="navTo('check')">提交选区 →（桩）</button></div>` +
-                `</div></div>`;
-        }
-
-        function renderCheckScreen(def) {
-            const sec = document.getElementById(def.id);
-            sec.innerHTML = screenHeader(def) +
-                `<div class="screen-body"><div class="screen-stub">` +
-                `<p class="screen-stub-tag">③ 校对屏 · v0.3.2a 落地</p>` +
-                `<p>回显 OCR 识别文本供逐字纠错（3 种渲染方式），可命名存草稿或提交。</p>` +
-                `<div class="stub-board">2x + 4 = 10\nx = 3   ← （示例：将来是可编辑的识别结果）</div>` +
-                `<div class="stub-actionbar">` +
-                `<span style="color:var(--text-dim);">存草稿 → POST /work/save</span>` +
-                (workFlow === 'submit'
-                    ? `<button class="btn-primary" onclick="alert('v0.3.2a：提交 → POST /verify 共识判分');navHome()">提交（判分桩）</button>`
-                    : `<button class="btn-primary" onclick="navTo('assistant')">提交 → AI 助手 →（桩）</button>`) +
-                `</div></div></div>`;
-        }
-
-        function renderAssistantScreen(def) {
-            const sec = document.getElementById(def.id);
-            sec.innerHTML = screenHeader(def) +
-                `<div class="screen-body"><div class="screen-stub">` +
-                `<p class="screen-stub-tag">④ AI 助手屏 · v0.3.3a 落地（POST /assistant/analyze）</p>` +
-                `<p>逐行对齐「学生作答 | AI 分析」，无误的行留空；可对某行追问。</p>` +
-                `<div class="assist-cols">` +
-                `<div class="col-head">学生作答</div><div class="col-head col-right">AI 分析</div>` +
-                `<div class="col-cell">2x + 4 = 10</div><div class="col-cell col-right empty">（留空 — 这步没问题）</div>` +
-                `<div class="col-cell">2x = 10 + 4</div><div class="col-cell col-right">⚠ 移项要变号，应为 10 − 4</div>` +
-                `</div></div></div>`;
-        }
-
-        function renderAskScreen(def) {
-            const sec = document.getElementById(def.id);
-            sec.innerHTML = screenHeader(def) +
-                `<div class="screen-body"><div class="screen-stub">` +
-                `<p class="screen-stub-tag">⑤ 答疑屏 · v0.3.4a 落地</p>` +
-                `<p>不经白板，就当前题目直接问答（苏格拉底式、不直接给答案）。</p>` +
-                `<div class="stub-actionbar">` +
-                `<span style="color:var(--text-dim);">解析此题 → POST /analyze · 问答 → POST /claude/chat</span>` +
-                `<button class="btn-secondary" onclick="navBack()">← 返回题目</button></div>` +
-                `</div></div>`;
-        }
-    </script>
-
     <!-- Native-canvas drawing engine — no p5.js, no external CDN, works offline. -->
     <script>
         // Boot the UI and the native drawing board directly.
         document.getElementById('loading').style.display = 'none';
         document.getElementById('main-ui').style.display = 'flex';
         setup();          // create the native <canvas> and start the render loop
-        initProblemScreen();   // v0.3: source picker, tags toggle, 3-action row
 
         // Exam mode (?exam=1): page through the AI-generated exam questions that
         // demo_exam.html stashed in sessionStorage, instead of random problems.

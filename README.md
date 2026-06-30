@@ -122,6 +122,21 @@ frontend; it calls the backend at `http://localhost:8000`).
 - **Accounts** — sign up / sign in / sign out (SQLite, PBKDF2-hashed passwords). Optional —
   the demo works without logging in.
 
+## Student UI — v0.3 multi-screen redesign (planned, not yet built)
+The core `demo_standalone.html` is being re-planned from a single-page tool into a
+**five-screen guided flow**. Spec, navigation state machine, and the backend it needs live in
+[`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §"v0.3 学生端「试卷测试」多屏交互重构".
+- **Screens**: ① problem (source picker AI/学科网/bank · tags toggle · whiteboard) → ② select
+  (lasso/crop the strokes to send · pick OCR model) → ③ check (OCR review + correct, 3 render
+  modes, save draft) → ④ AI assistant (line-by-line answer ↔ analysis, `<manim>` viz, per-line
+  follow-up) and ⑤ ask (Q&A for "I'm stuck", no whiteboard).
+- **Reuses** today's endpoints (`/practice/next`, `/recognize`, `/verify`, `/claude/chat`,
+  `/analyze`, `/animate`); **adds** `/recognize/models`, `/work/*` (personal draft DB,
+  `workspace.py`), `/assistant/analyze` + `/assistant/ask` (`assistant.py`), and a phased real
+  Manim render (`/manim/render`).
+- **Migration rule**: before any full rewrite, the old file is archived to the nearest
+  `legacy/` (e.g. `web/legacy/demo_standalone.v0.2.html`) — never deleted.
+
 ## Notes & known issues
 - **OCR / exam generation can be slow (20–50s+)** — the shared gateway is latency-prone;
   the UI shows a spinner. See [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) §5
