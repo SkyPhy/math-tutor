@@ -156,21 +156,31 @@ Rules:
 
 
 def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
-                      other_dimension: str, other_tags: List[str]) -> str:
+                      other_dimension: str, other_tags: List[str],
+                      logic_tags: Optional[List[Dict[str, str]]] = None) -> str:
     """System prompt to generate one exam question per knowledge-point tag in a
     dimension, returned as a strict JSON array. Each question is primarily about
-    one tag but may also carry tags from the OTHER dimension (cross-marking)."""
+    one tag but may also carry tags from the OTHER dimension (cross-marking), plus
+    a logic-thinking type + an open-ended difficulty (the v2.0 core fields)."""
     listing = []
-    for subdim, tags in subdims.items():
-        for tag in tags:
+    for subdim, tag_names in subdims.items():
+        for tag in tag_names:
             listing.append(f'  - 维度「{subdim}」· 知识点「{tag}」')
     tags_block = "\n".join(listing)
     other_block = "、".join(other_tags)
+    lb = "、".join(t["name"] for t in (logic_tags or [])) or "（暂无）"
 
-    return f"""你是一位小学数学命题老师。请为「{dimension}」维度下列出的每一个知识点，各出一道适合小学生的题目。
+    return f"""你是一位数学命题老师。请为「{dimension}」维度下列出的每一个知识点，各出 1 道题，覆盖全部知识点。
 
-需要覆盖的知识点（每个出且仅出一道题）：
+需要覆盖的知识点（每个出且仅出一道题，作为该题的 primary_tag）：
 {tags_block}
+
+**好题观（重要）**：一道好题往往不是一两个思维/知识点的堆砌，而是把**多种思维类型与多个知识点
+巧妙融合**让学生综合应用；**题干短而内容丰富**。请以该知识点为核心，自然地融入其它思维与知识点，
+并把题目真正用到的**每个思维步骤都标进 logic_tags**（它们也是日后引导学生分步解答的"单位步骤"）。
+**难度别一刀切成"小学水平"**：以"**目标学生真正解出它有多难**"为准，按解题步骤数 / 思维陷阱 /
+抽象程度 / 所选思维难度综合判定；该简单就简单、该难就大胆给高（可超过 10），不要把一步可答的
+题硬标高分，也不要把需要多步推理的题硬压成简单。
 
 输出要求：
 - 只输出一个 JSON 数组，不要任何解释、前后缀或 Markdown 代码块。
@@ -178,12 +188,16 @@ def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
   {{
     "primary_tag": "<上面列出的知识点，原样照抄>",
     "subdimension": "<该知识点所属的维度，原样照抄>",
-    "statement": "<中文题目，简洁、适合小学生>",
+    "statement": "<中文题目，表述短而内容丰富、融合多个概念；难度越高越要多步、有思维含量>",
     "latex": "<核心算式的 LaTeX；没有就用空字符串>",
-    "answer": "<参考答案，简短>",
-    "also_tags": ["<这道题还涉及的「{other_dimension}」中的标签，从下面选0-2个>"]
+    "answer": "<参考答案，简短但是准确且正确>",
+    "also_tags": ["<这道题还涉及的「{other_dimension}」中的标签，从下面选 0-2 个>"],
+    "logic_tags": ["<解这道题需要的解决问题思路/思维步骤，从下面逻辑思维类型里选 1-3 个，第一个为主，原样照抄>"],
+    "new_tags": [{{"name": "<新逻辑思维类型名>", "kind": "logic", "reason": "<为何现有都不贴切>"}}],
+    "difficulty": <≥1 的整数难度，按真正解出有多难（锚点 1=认识数字、10=大学通识课），可超过 10>
   }}
 - 「{other_dimension}」可选标签：{other_block}
+- 「逻辑思维类型」可选标签：{lb}（**优先复用**；都不贴切再用 new_tags 增**有深度**的新类型，否则 []）
 - 务必输出合法 JSON，字符串中不要出现未转义的引号或反斜杠。"""
 
 
@@ -222,12 +236,16 @@ def build_tagged_generation_prompt(knowledge_tags: List[str],
     return f"""你是一位数学命题老师。请出 **1 道**中文数学题，并为它打标签。题目难度由下方决定，
 范围可从"认识数字"一直到"大学通识课"及以上——**不要默认只出小学水平的简单题**。难度较高时，
 应大胆使用初高中及以上的内容（平面几何、解析几何、三角函数、函数、数列、概率、统计、集合、向量、
-导数等），而不是把小学题硬标高分。{focus_line}{target_line}
+导数等），而不是把小学题硬标高分。
+**好题观（重要）**：一道好题往往不是一两个思维/知识点的堆砌，而是把**多种思维类型与多个知识点
+巧妙融合**让学生综合应用；**题干短而内容丰富**。难度越高，融合的思维与知识点应越多、越精巧。请按此命题，
+并把这道题真正用到的**每一个思维步骤与知识点都标上**（它们也将作为日后引导学生分步解答的"单位步骤"）。{focus_line}{target_line}
 
-【可用「知识点」标签】（按内容选，挑 0–2 个最贴切的，原样照抄；难度高就选更高阶的知识点）：
+【可用「知识点」标签】（把题目真正用到的知识点都选上，挑 **1–3 个**、难题可更多，原样照抄；难度高就选更高阶的）：
 {kb}
 
-【可用「逻辑思维类型」标签】（按这道题主要训练的**解决问题思路**选，挑 1–2 个，第一个为主，原样照抄）：
+【可用「逻辑思维类型」标签】（把解这道题需要的**解决问题思路/思维步骤**都选上，挑 **1–4 个**、难题往往多种融合，
+第一个为最主要，原样照抄）：
 {lb}
 
 【难度（整数，从 1 起、**无上限**）：以"**目标学生真正解出它有多难**"为准——综合
@@ -242,11 +260,11 @@ def build_tagged_generation_prompt(knowledge_tags: List[str],
   不能一步就能答；低难度（1–2）才可简单直接。务必真正考查所选逻辑思维类型，避免套路化、过于简单。
 - 对象格式严格如下：
   {{
-    "statement": "<中文题目，表述清晰；难度越高越要多步、有思维含量，不要过于简单>",
+    "statement": "<中文题目，表述短而内容丰富、融合多个概念；难度越高越要多步、有思维含量，不要过于简单>",
     "latex": "<核心算式的 LaTeX；没有就用空字符串>",
-    "answer": "<参考答案，简短>",
-    "knowledge_tags": ["<从上面知识点标签里选 0–2 个，原样照抄>"],
-    "logic_tags": ["<从上面逻辑思维标签里选 1–2 个，原样照抄，第一个为主>"],
+    "answer": "<参考答案，简短而直指核心>",
+    "knowledge_tags": ["<题目真正用到的知识点，1–3 个或更多，原样照抄>"],
+    "logic_tags": ["<解题需要的思维步骤，1–4 个或更多，原样照抄，第一个为主>"],
     "new_tags": [{{"name": "<新标签名>", "kind": "logic 或 knowledge", "reason": "<为何现有标签都不贴切>"}}],
     "difficulty": <≥1 的整数，越大越难，可超过 10>
   }}

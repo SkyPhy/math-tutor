@@ -122,10 +122,13 @@ class ClaudeService:
         session_id: str = "anon",
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        timeout: Optional[float] = None,
     ) -> str:
         """Send a Messages-API request and return the concatenated text.
 
-        Raises ClaudeError on misconfiguration, rate-limit, open circuit,
+        `timeout` overrides the default per-request read timeout (seconds) — heavy
+        batch generations (many questions in one call) need longer than the chat
+        default. Raises ClaudeError on misconfiguration, rate-limit, open circuit,
         transport error, bad status, or empty/unexpected payload.
         """
         if not config.is_configured():
@@ -160,7 +163,7 @@ class ClaudeService:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         try:
-            with urllib.request.urlopen(req, timeout=config.CLAUDE_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or config.CLAUDE_TIMEOUT) as resp:
                 body = resp.read().decode("utf-8")
             text = self._extract_text(body)
             self._breaker.record_success()

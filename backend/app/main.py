@@ -1796,26 +1796,42 @@ def _parse_json_array(text: str):
 
 
 def _ai_questions_for_dimension(dim: str, grade, session_id: str):
-    """Ask Claude for one question per tag in `dim`, as JSON. [] on failure."""
+    """Ask Claude for one question per knowledge-point tag in `dim`, as JSON.
+
+    Each question keeps its knowledge point as the PRIMARY tag (so /exam/generate
+    still guarantees 25/25 coverage), and additionally carries — drawn from / grown
+    into the live tags.db vocabulary — one or more 逻辑思维类型 (logic) tags plus an
+    open-ended difficulty (the v2.0 core fields). Any logic type the model proposes
+    when nothing fits is ADDED to the store (self-evolving loop). [] on failure."""
     subdims = exam.CATALOGUE[dim]
     other_dim = exam.DIM_METHOD if dim == exam.DIM_CORE else exam.DIM_CORE
     other_tags = [t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim]
-    system = prompts.build_exam_prompt(dim, subdims, other_dim, other_tags)
-    try:
-        text = claude_service.complete(
-            system=system,
-            messages=[{"role": "user", "content": "请生成题目，只输出 JSON 数组。"}],
-            session_id=session_id, max_tokens=3000, temperature=0.7,
-        )
-    except ClaudeError:
-        return []
-
-    arr = _parse_json_array(text)
+    l_tags = [{"name": t["name"], "move": (t.get("meta") or {}).get("move"),
+               "flaw": (t.get("meta") or {}).get("flaw")}
+              for t in tags.list_tags(kind=tags.KIND_LOGIC)]
+    system = prompts.build_exam_prompt(dim, subdims, other_dim, other_tags,
+                                       logic_tags=l_tags)
+    arr = None
+    for attempt in range(3):       # retry transient timeouts / truncated-JSON parse misses
+        try:
+            text = claude_service.complete(
+                system=system,
+                messages=[{"role": "user", "content": "请生成题目，只输出 JSON 数组。"}],
+                session_id=f"{session_id}:{dim}", max_tokens=6000,
+                temperature=0.7 + 0.1 * attempt,
+                timeout=180,        # one big batch (many questions) needs far longer than chat
+            )
+        except ClaudeError:
+            return []
+        arr = _parse_json_array(text)
+        if arr:
+            break
     if not arr:
         return []
 
     valid = {t["tag"] for t in exam.all_tags() if t["dimension"] == dim}
     valid_other = {t["tag"] for t in exam.all_tags() if t["dimension"] == other_dim}
+    known_l = {t["name"] for t in l_tags}
     out = []
     for item in arr:
         if not isinstance(item, dict):
@@ -1823,21 +1839,56 @@ def _ai_questions_for_dimension(dim: str, grade, session_id: str):
         ptag = (item.get("primary_tag") or "").strip()
         if ptag not in valid:
             continue
-        tags = [{"dimension": dim, "subdimension": exam.tag_subdimension(ptag) or "",
-                 "tag": ptag, "primary": True}]
+
+        # Self-evolving step: register any NEW logic/knowledge tags proposed, so a
+        # freshly-coined deep logic type can be attached to the very question below.
+        added_logic: List[str] = []
+        for nt in (item.get("new_tags") or []):
+            if not isinstance(nt, dict):
+                continue
+            nm = (nt.get("name") or "").strip()
+            kind = (nt.get("kind") or "").strip()
+            if not nm or kind not in (tags.KIND_LOGIC, tags.KIND_KNOWLEDGE):
+                continue
+            tags.add_tag(nm, kind, description=(nt.get("reason") or "").strip() or None,
+                         source="ai")
+            if kind == tags.KIND_LOGIC:
+                added_logic.append(nm); known_l.add(nm)
+
+        # Knowledge point stays PRIMARY (coverage contract); cross-mark the other
+        # knowledge dimension; then attach the logic-thinking type(s) + difficulty.
+        qtags = [{"dimension": dim, "subdimension": exam.tag_subdimension(ptag) or "",
+                  "tag": ptag, "primary": True}]
+        tags.bump_usage(ptag)
         for ot in (item.get("also_tags") or []):
             ot = (ot or "").strip()
             if ot in valid_other:
-                tags.append({"dimension": other_dim,
-                             "subdimension": exam.tag_subdimension(ot) or "",
-                             "tag": ot, "primary": False})
+                qtags.append({"dimension": other_dim,
+                              "subdimension": exam.tag_subdimension(ot) or "",
+                              "tag": ot, "primary": False})
+                tags.bump_usage(ot)
+        chosen_logic = [t for t in (item.get("logic_tags") or []) if t in known_l]
+        for nm in added_logic:
+            if nm not in chosen_logic:
+                chosen_logic.append(nm)
+        for nm in chosen_logic:
+            qtags.append(_question_tag_row(nm, primary=False))
+            tags.bump_usage(nm)
+
+        diff = item.get("difficulty")
+        try:                                # open-ended ladder: floor only, no cap
+            diff = max(exam.DIFFICULTY_MIN, int(diff)) if diff is not None else None
+        except (ValueError, TypeError):
+            diff = None
+
         out.append({
             "statement": (item.get("statement") or "").strip(),
             "latex": (item.get("latex") or "").strip(),
             "answer": (item.get("answer") or "").strip(),
             "grade": grade,
+            "difficulty": diff,
             "source": "ai",
-            "tags": tags,
+            "tags": qtags,
         })
     return out
 
