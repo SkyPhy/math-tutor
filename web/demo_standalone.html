@@ -977,7 +977,20 @@
         .assist-cols .col-cell.empty { color: var(--text-dim); font-style: italic; }
 
         /* problem-screen v0.3 additions: source picker, tags toggle, 3-action row */
-        .problem-source-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+        .problem-source-row {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--glass-border);
+        }
+        .problem-row-label { font-size: 0.95rem; font-weight: 600; color: var(--text-main); letter-spacing: 0.02em; }
+        .problem-row-spacer { flex: 1 1 auto; }
+        .problem-source-row .pc-label { font-weight: 500; color: var(--text-main); }
+        /* compact pill button (tags toggle) — distinct from the big action buttons */
+        .chip-btn {
+            background: rgba(56, 189, 248, 0.10); border: 1px solid rgba(56, 189, 248, 0.30);
+            color: var(--accent-blue); border-radius: 999px; padding: 5px 14px;
+            font-size: 0.82rem; font-family: 'Outfit', sans-serif; cursor: pointer; transition: all 0.2s ease;
+        }
+        .chip-btn:hover { background: rgba(56, 189, 248, 0.18); }
         .problem-action-row { display: flex; gap: 14px; flex-wrap: wrap; }
         .problem-action-row > button { flex: 1; min-width: 200px; }
         .problem-meta.tags-hidden .problem-tag,
@@ -1006,15 +1019,18 @@
             <div class="problem-card-top">
                 <div id="problem-meta" class="problem-meta tags-hidden"></div>
                 <div class="problem-actions">
-                    <button class="btn-secondary problem-refresh" onclick="loadProblem()" title="从题库换一道题">🎲 换一题</button>
-                    <button class="btn-secondary" id="ai-gen-btn" onclick="loadProblem(true)" title="让 AI 现场出一道新题">✨ AI 出题</button>
+                    <!-- 出题来源（含「AI 生成」）已移到下方来源下拉；这里只保留「按当前来源换一道」。 -->
+                    <button class="btn-secondary problem-refresh" onclick="loadProblem()" title="按当前来源换一道题">🎲 换一题</button>
                 </div>
             </div>
-            <!-- v0.3: tags toggle (hidden by default) + 出题来源 picker (populated from SOURCES). -->
+            <!-- v0.3: "Problem" bar — tags toggle (hidden by default) on the left,
+                 出题来源 picker (populated from SOURCES) on the right (wireframe ①). -->
             <div class="problem-source-row">
-                <button id="tags-toggle-btn" class="btn-secondary" onclick="toggleProblemTags()"
+                <span class="problem-row-label">Problem</span>
+                <button id="tags-toggle-btn" class="chip-btn" onclick="toggleProblemTags()"
                     title="显示 / 隐藏本题的知识点与思维类型标签">🏷 显示标签</button>
-                <label class="pc-label">出题来源
+                <span class="problem-row-spacer"></span>
+                <label class="pc-label">来源
                     <select id="source-select" class="pc-select" onchange="onSourceChange(this.value)"></select>
                 </label>
             </div>
@@ -1034,7 +1050,7 @@
             </div>
         </div>
 
-        <!-- Whiteboard + "Solve with Voice or Text" — below the problem -->
+        <!-- Whiteboard (full width; the old right-hand solve sidebar was removed in v0.3.0b) -->
         <div class="container">
             <div id="canvas-wrapper">
                 <!-- Board-engine selector: choose between the built-in canvas and Excalidraw. -->
@@ -1080,6 +1096,13 @@
                 <!-- Live OCR progress — the backend recognition status shows here. -->
                 <div id="ocr-progress" class="ocr-progress" style="display:none;"></div>
 
+                <!-- v0.3.0b: the "Solve with Voice or Text" sidebar was retired. This
+                     hidden relay + relocated result box keep the board's 📤 Submit →
+                     OCR → analyze path working until it folds into the 提交→选区→校对
+                     flow (v0.3.2a). -->
+                <input type="hidden" id="mathInput">
+                <div id="result" style="display:none;" class="result-box"></div>
+
                 <!-- Blank hint board — replaces the whiteboard once "Next Hint" is clicked -->
                 <div id="hint-board">
                     <h3>💡 Hints</h3>
@@ -1123,28 +1146,9 @@
                         onclick="showWhiteboard()">← Back to Whiteboard</button>
                 </div>
             </div>
-
-            <div class="sidebar">
-                <div class="control-group">
-                    <h3>Solve with Voice or Text</h3>
-                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <input type="text" id="mathInput" placeholder="Write or speak e.g. 2x + 4 = 10">
-                        <button id="voiceBtn" class="voice-btn" onclick="startVoiceInput()"
-                            title="Voice Input">🎤</button>
-                    </div>
-                    <p style="margin:0 0 10px; color:var(--text-dim); font-size:0.85rem;">Choose how to work it out:</p>
-                    <div style="display:flex; gap:10px;">
-                        <select id="methodSelect" class="method-select" style="flex:1;">
-                            <option value="sympy">Solve with SymPy</option>
-                            <option value="manim">Animate with Manim</option>
-                            <option value="ai">AI Response</option>
-                        </select>
-                        <button class="btn-primary" onclick="runSelectedMethod()">▶ Start</button>
-                    </div>
-                </div>
-
-                <div id="result" style="display:none;" class="result-box"></div>
-            </div>
+            <!-- v0.3.0b: "Solve with Voice or Text" sidebar removed (SymPy / Manim /
+                 inline-AI launcher). Its capabilities move into the guided flow:
+                 OCR → 校对 → 判分（提交）/ 逐行分析（AI 助手）/ 答疑. -->
         </div>
 
             <!-- v0.3 bottom action row — three guided-flow actions, rendered
@@ -2698,9 +2702,9 @@
 
         // 出题来源 picker → maps 1:1 to GET /practice/next?source= (all already supported).
         const SOURCES = [
-            { value: 'ai',    label: '1 · AI 生成',   generate: true  },
-            { value: 'bank',  label: '3 · 后台题库',  generate: false },
+            { value: 'ai',    label: '1 · AI 生成',    generate: true  },
             { value: 'xueke', label: '2 · 学科网 API', generate: false },
+            { value: 'bank',  label: '3 · 后台题库',   generate: false },
         ];
 
         // Bottom action row on the problem screen. flow = which path the
