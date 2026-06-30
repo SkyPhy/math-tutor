@@ -1685,6 +1685,14 @@ def read_root():
     }
 
 
+@app.get("/recognize/models")
+def recognize_models():
+    """List the OCR engines the select screen can choose from (drives the
+    「选择 OCR 模型」dropdown). Each model's ``id`` is the ``method`` value to pass
+    back to ``POST /recognize``. See recognize.list_models()."""
+    return recognize.list_models()
+
+
 @app.post("/recognize")
 async def recognize_math(file: UploadFile = File(...), method: str = "nex"):
     """

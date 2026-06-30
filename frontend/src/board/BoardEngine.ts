@@ -46,6 +46,14 @@ export class BoardEngine {
     this.raf = requestAnimationFrame(this.renderLoop);
   }
 
+  get width() {
+    return CANVAS_W;
+  }
+
+  get height() {
+    return CANVAS_H;
+  }
+
   /** Move the canvas into a host container (the active screen's board area). */
   mount(host: HTMLElement) {
     host.appendChild(this.canvas);

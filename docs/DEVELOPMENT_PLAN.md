@@ -599,7 +599,8 @@ Math Solver"）。本计划做三件事：
 
 #### G. 分阶段实施计划（每步：目标 → 交付物 → 验收；均可独立交付/回退）
 - **v0.3.0a · 备份 + 屏路由骨架**：执行 §F 备份；把单页改造成 5-`<section>` + router + 返回栈；题目屏接来源下拉/标签开关/三动作（先桩接）。**验收**：五屏可互相跳转、返回栈正确；现有出题/白板不回归。
-- **v0.3.1a · 选区屏**：native `strokes[]` 套索/框选 + 句柄缩放 + 只导出选中区；OCR 模型下拉（`/recognize/models`）。**验收**：只发送选中笔画的 PNG，`/recognize` 正常返回。
+- **v0.3.1a · 选区屏**（→ 已作为 **v0.4.1a** 在 React 落地）：native `strokes[]` 套索/框选 + 句柄缩放 + 只导出选中区；OCR 模型下拉（`/recognize/models`）。**验收**：只发送选中笔画的 PNG，`/recognize` 正常返回。
+  - **已实现（v0.4.1a）**：`frontend/src/board/selection.ts`（`exportRect`/`exportLasso` 直接从白板 canvas 拷像素，忽略擦除 op）+ `SelectScreen`（矩形 8 句柄缩放/平移 + 套索；进屏默认=墨迹包围盒）+ 后端 `GET /recognize/models`（`recognize.list_models()`）。验收达成：真后端只裁选中区 OCR 返回 `2+3=5`/status ok；headless Chrome 对 `selection.ts` 11 断言全过（含空白区导出 0 墨迹）。
 - **v0.3.2a · 校对屏 + 个人草稿库**：三渲染方式（marked.js+MathJax）+ 纠错工具 + `workspace.py`/`/work/*`。**验收**：识别→改字→存草稿→重开续作；`final` 提交后 submit 路径进 `/verify` 判分。
 - **v0.3.3a · AI 助手屏（逐行分析）**：`assistant.py` + `/assistant/analyze` + 两列对齐 + 行级追问 `/assistant/ask`；公共聊天控件（渲染/换行键/特殊符号）。**验收**：学生作答逐行对齐分析，无误行留空；点行可带上下文追问。
 - **v0.3.4a · 答疑屏**：题目屏「提问/不会做」→ 答疑屏；`/analyze` 解析 + `/claude/chat` 问答 + 公共控件。**验收**：不经白板即可就本题问答，苏式不直接给答案。

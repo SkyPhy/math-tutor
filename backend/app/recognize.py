@@ -275,6 +275,33 @@ def recognize_via_claude(image_bytes: bytes) -> dict:
     return {"text": text, "status": "ok" if text else "empty"}
 
 
+def list_models() -> dict:
+    """Advertise the OCR engines the select screen can pick from.
+
+    Each model maps to a ``method`` value accepted by ``POST /recognize``:
+      - ``nex``    → the nex-n2-pro specialised OCR (path 1, default)
+      - ``claude`` → Claude vision (path 2)
+      - ``auto``   → nex first, fall back to Claude if it reads nothing
+    ``available`` reflects whether the backing gateway is configured in ``.env``;
+    the UI still lists every engine but can flag/disable the unusable ones. The
+    default is the first usable engine so the dropdown lands on something that works.
+    """
+    nex_ok = config.ocr_configured()
+    claude_ok = claude_vision_available()
+    models = [
+        {"id": "nex", "label": "nex-n2-pro 专用 OCR", "available": nex_ok},
+        {"id": "claude", "label": "Claude 视觉", "available": claude_ok},
+        {"id": "auto", "label": "自动（nex 失败回退 Claude）", "available": nex_ok or claude_ok},
+    ]
+    if nex_ok:
+        default = "nex"
+    elif claude_ok:
+        default = "claude"
+    else:
+        default = "nex"  # nothing configured → mock path; keep a stable default
+    return {"models": models, "default": default}
+
+
 def warmup() -> bool:
     """No local model to preload (OCR is a remote API now). Kept for the
     startup hook's call site; returns whether the OCR gateway is configured."""

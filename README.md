@@ -143,9 +143,11 @@ navigation state machine, and the backend it needs live in
   (lasso/crop the strokes to send · pick OCR model) → ③ check (OCR review + correct, 3 render
   modes, save draft) → ④ AI assistant (line-by-line answer ↔ analysis, `<manim>` viz, per-line
   follow-up) and ⑤ ask (Q&A for "I'm stuck", no whiteboard).
-- **Status (v0.4.0a)**: scaffolded the React app; **screen ① is wired** (source → `/practice/next`,
-  MathJax problem card, native whiteboard, targeted practice, 3 actions). Screens ②–⑤ are honest
-  stubs that name their endpoints; the real interactions land in **v0.4.1a → v0.4.4a**.
+- **Status (v0.4.1a)**: React app scaffolded; **screens ①–② are live**. ① problem (source →
+  `/practice/next`, MathJax card, native whiteboard, targeted practice, 3 actions). ② select —
+  rect/lasso framing over the board strokes with drag-handles, exporting **only the selected region**
+  as a PNG → `/recognize?method=` (engine dropdown from `/recognize/models`). Screens ③–⑤ are honest
+  stubs that name their endpoints; the real interactions land in **v0.4.2a → v0.4.4a**.
 - **Reuses** today's endpoints (`/practice/next`, `/recognize`, `/verify`, `/claude/chat`,
   `/analyze`, `/animate`); **adds** `/recognize/models`, `/work/*` (personal draft DB,
   `workspace.py`), `/assistant/analyze` + `/assistant/ask` (`assistant.py`), and a phased real

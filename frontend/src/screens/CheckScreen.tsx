@@ -6,7 +6,7 @@ import { useStore } from '../store';
 // correction (3 render modes), save a named draft (POST /work/save), then route:
 // submit → POST /verify (consensus grading); assist → AI assistant screen.
 export function CheckScreen({ active }: { active: boolean }) {
-  const { workFlow, navTo, navHome } = useStore();
+  const { workFlow, navTo, navHome, ocrText } = useStore();
   return (
     <section className={`screen${active ? ' active' : ''}`} id="screen-check">
       <ScreenHeader def={SCREEN_DEFS.check} />
@@ -15,7 +15,9 @@ export function CheckScreen({ active }: { active: boolean }) {
           <p className="screen-stub-tag">③ 校对屏 · v0.4.2a 落地</p>
           <p>回显 OCR 识别文本供逐字纠错（3 种渲染方式），可命名存草稿或提交。</p>
           <div className="stub-board">
-            2x + 4 = 10{'\n'}x = 3 ← （示例：将来是可编辑的识别结果）
+            {ocrText
+              ? ocrText
+              : '（尚无识别结果——从②选区屏「提交选区」后，OCR 文本会显示在这里）'}
           </div>
           <div className="stub-actionbar">
             <span style={{ color: 'var(--text-dim)' }}>存草稿 → POST /work/save</span>

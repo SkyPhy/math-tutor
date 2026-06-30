@@ -11,6 +11,33 @@
 
 ---
 
+## v0.4.1a — 选区屏（React）：白板笔画上叠加矩形/套索框选 + 句柄缩放 + 仅导出选中区 → OCR
+
+落地五屏流程的第 2 屏（`docs/DEVELOPMENT_PLAN.md` §C2）。学生作答前先**框选白板的哪一部分**发给
+OCR——只把**选中区域**重绘为 PNG 上传，未选中的内容不外发。**后端仅新增一个只读端点**，判分/共识/
+诊断内核零改动。
+
+- **后端 `GET /recognize/models`（`recognize.list_models()`）**：列出 OCR 引擎
+  `nex`（nex-n2-pro 专用 OCR）/`claude`（Claude 视觉）/`auto`（nex 失败回退 Claude），每个带
+  `available`（按 `.env` 是否配置网关）+ `default`（首个可用引擎）。`id` 即回传 `POST /recognize?method=` 的值。
+- **选区几何 / 导出（`frontend/src/board/selection.ts`，纯函数）**：`normRect`/`clampRect`（翻转负宽高、
+  钳进画布）、`inkBounds`（笔画包围盒，忽略擦除 op）、`polyBounds`、`exportRect`（裁出矩形区域）、
+  `exportLasso`（裁出多边形内部）。导出**直接从已渲染的白板 canvas 拷像素**（而非从 op 列表重推），
+  天然正确处理擦除、忠实于真实墨迹。
+- **选区屏 `SelectScreen`（v0.4.1a 真交互）**：在白板快照上叠加两张 canvas（底图 + 选区层）；
+  **矩形**工具（8 句柄：四角 + 四边可拖动改大小、框内拖动整体平移、空白处重新框选）与**套索**工具
+  （自由勾勒多边形）；进屏默认选区 = 墨迹包围盒（留白 24px）。底部「OCR 模型」下拉由
+  `GET /recognize/models` 填充（失败回退内置 3 项），「提交选区」→ `exportRect/exportLasso` 出 PNG →
+  `POST /recognize?method=<所选>` → OCR 文本入 store → 进③校对屏；含识别中态、失败原因提示。
+  `BoardEngine` 加 `width`/`height` getter 供选区屏取画布尺寸（不再硬编码 800×600）。
+- **校对屏小改**：`CheckScreen`（仍是 v0.4.2a 占位）现回显 store 里的真实 OCR 文本，使
+  选区→识别→校对链路**可观测**（无结果时显示提示文案）。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功（47 模块）；**真后端 HTTP**：
+  `GET /recognize/models` 返回 3 引擎 + `default=nex`；合成一张含「2+3=5」（上）与「999 wrong」（下）
+  的白板，**只裁上半区**发 `POST /recognize?method=nex` → `{"text":"2+3=5","engine":"nex-n2-pro","status":"ok"}`
+  ——选中区正确识别、未选中的干扰内容不外发。**真浏览器**（Vite + headless Chrome）对真实
+  `selection.ts` 跑 11 条断言全过（含「空白区域导出 0 墨迹」证明只发选中区）；app 启动回归正常。
+
 ## v0.4.0a — 学生端前端「重平台化」：静态 HTML → Vite + React + TS（`frontend/`）
 
 按用户定向（2026-06-30：「改为动态页面！直接重构！…html 过时了且不方便维护，改为 nodejs 维护，
