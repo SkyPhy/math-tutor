@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import glob
 import shutil
 import secrets
@@ -42,11 +43,43 @@ RENDER_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT", "150"))
 _SCENE_RE = re.compile(r"class\s+(\w+)\s*\(\s*Scene\s*\)")
 _DEFAULT_SCENE = "SolveScene"
 
+# Any of these mobjects typeset via LaTeX (manim shells out to `latex`/`dvisvgm`).
+# `Title` too — it subclasses Tex. Scenes using only Text/MarkupText need no LaTeX.
+_TEX_RE = re.compile(r"\b(?:MathTex|Tex|Title|TransformMatchingTex)\b")
+# Cross-platform LaTeX front-ends, in rough order of preference for a probe.
+_LATEX_BINS = ("latex", "xelatex", "pdflatex", "lualatex")
+
 
 def available() -> bool:
     """True only when BOTH the manim CLI and ffmpeg are on PATH — the two things a
-    real render needs. When false, callers fall back to the browser storyboard."""
+    real render needs. When false, callers fall back to the browser storyboard.
+
+    Note: LaTeX is checked separately (``latex_available``) because Text-only scenes
+    render fine without it — we only require it for MathTex/Tex scenes."""
     return shutil.which("manim") is not None and shutil.which("ffmpeg") is not None
+
+
+def latex_available() -> bool:
+    """True when a LaTeX front-end is on PATH. Required for MathTex/Tex/Title scenes
+    (manim invokes ``latex`` + ``dvisvgm`` to typeset formulas). Cross-platform:
+    works via ``shutil.which`` regardless of MiKTeX / TeX Live / MacTeX / TinyTeX."""
+    return any(shutil.which(b) is not None for b in _LATEX_BINS)
+
+
+def _needs_latex(code: str) -> bool:
+    """Does this scene use a LaTeX-backed mobject? Cheap static check so we can fail
+    fast with a clear message instead of a cryptic subprocess traceback."""
+    return bool(_TEX_RE.search(code or ""))
+
+
+def latex_install_hint() -> str:
+    """Per-OS, actionable install guidance — surfaced when a MathTex/Tex scene can't
+    render because no LaTeX distribution is present (keeps the app portable)."""
+    if sys.platform.startswith("win"):
+        return "请安装 LaTeX：`choco install miktex`（或 MiKTeX/TeX Live 安装包）。"
+    if sys.platform == "darwin":
+        return "请安装 LaTeX：`brew install --cask mactex-no-gui`（或 TinyTeX）。"
+    return "请安装 LaTeX：`apt install texlive-latex-extra texlive-fonts-extra dvisvgm`（或 TinyTeX）。"
 
 
 def status() -> Dict[str, Any]:
@@ -54,6 +87,7 @@ def status() -> Dict[str, Any]:
         "available": available(),
         "manim": shutil.which("manim") is not None,
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        "latex": latex_available(),
         "media_dir": MEDIA_DIR,
     }
 
@@ -134,7 +168,37 @@ def render(*,
         return {"status": "unavailable", "manim_code": "", "provider": provider,
                 "scene": scene, "reason": "没有可渲染的 Manim 代码。"}
 
+    # Fast fail: a MathTex/Tex scene without a LaTeX distro will spend seconds only to
+    # die with a `latex not found` traceback. Detect it up front and return a clear,
+    # actionable reason so the frontend degrades to the storyboard immediately. Keeps
+    # the app portable — the same message guides install on Win / macOS / Linux.
+    if _needs_latex(code) and not latex_available():
+        return {"status": "error", "manim_code": code, "provider": provider,
+                "scene": scene, "latex_missing": True,
+                "reason": "该动画包含数学公式（MathTex/Tex），需要 LaTeX 才能渲染，"
+                          f"当前环境未检测到 LaTeX。{latex_install_hint()}"
+                          "已回退到浏览器故事板。"}
+
     return _render_subprocess(code, scene, timeout or RENDER_TIMEOUT, provider)
+
+
+# Rich renders tracebacks inside box-drawing frames; strip that furniture so the real
+# error line survives the `[-600:]` tail slice instead of a wall of │ ─ ┌ characters.
+_BOX_CHARS = "─│┌┐└┘├┤┬┴┼╭╮╰╯━┃"
+
+
+def _clean_tail(raw: str, limit: int = 500) -> str:
+    """Distil manim's (often Rich-boxed) output down to its meaningful tail: drop box
+    border lines, strip frame characters, collapse blank runs, keep the last `limit`."""
+    lines = []
+    for ln in (raw or "").splitlines():
+        stripped = ln.strip().strip("|").strip()
+        # Skip pure-border rows (e.g. `+----+`, `╭───╮`) and empty lines.
+        if not stripped or all(c in _BOX_CHARS + "+-= " for c in stripped):
+            continue
+        lines.append(stripped.strip(_BOX_CHARS + "| ").strip())
+    text = " ".join(l for l in lines if l).strip()
+    return text[-limit:]
 
 
 def _render_subprocess(code: str, scene: str, timeout: int, provider: str) -> Dict[str, Any]:
@@ -148,11 +212,31 @@ def _render_subprocess(code: str, scene: str, timeout: int, provider: str) -> Di
         with open(scene_file, "w", encoding="utf-8") as fh:
             fh.write(code)
         cmd = ["manim", "-ql", "--format", "mp4", "--media_dir", tmp_media, scene_file, scene]
-        proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
+        # errors="replace": manim's output can mix encodings on Windows; never let a
+        # decode error mask the real failure with a generic "渲染出错".
+        proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout)
         if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip()[-600:]
+            raw = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+            # A LaTeX compile/lookup failure (missing distro, missing package, bad
+            # formula) is by far the most common cause — surface it plainly.
+            low = raw.lower()
+            # Signatures of a distro/binary being absent vs. a compile-time failure.
+            _MISSING = ("winerror 2", "no such file", "not found", "returned non-zero")
+            _COMPILE = ("latex compilation error", "missing $", "! ", "undefined control")
+            if _needs_latex(code) and (
+                not latex_available()
+                or ("latex" in low and any(s in low for s in _MISSING))
+                or any(s in low for s in _COMPILE)
+            ):
+                hint = latex_install_hint() if not latex_available() else \
+                    "LaTeX 已安装但编译失败（可能缺少宏包，或公式 LaTeX 语法有误）。"
+                return {"status": "error", "manim_code": code, "provider": provider,
+                        "scene": scene, "latex_missing": not latex_available(),
+                        "reason": f"数学公式渲染失败（LaTeX）。{hint}已回退到浏览器故事板。"}
             return {"status": "error", "manim_code": code, "provider": provider,
-                    "scene": scene, "reason": f"Manim 渲染失败：{tail or '未知错误'}"}
+                    "scene": scene,
+                    "reason": f"Manim 渲染失败：{_clean_tail(raw) or '未知错误'}"}
         # Locate the produced mp4 (manim writes under media/videos/<stem>/<quality>/).
         mp4s = glob.glob(os.path.join(tmp_media, "videos", "**", "*.mp4"), recursive=True)
         if not mp4s:

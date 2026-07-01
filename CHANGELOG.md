@@ -11,6 +11,29 @@
 
 ---
 
+## v0.4.8a — Manim 渲染修复（用户反馈「渲染失败：未知错误」）：装 LaTeX + 缺失可诊断 + 跨平台可移植
+
+修「Manim 渲染失败：未知错误」。**根因不是 manim/ffmpeg**——纯文本场景一直能出片；应用为每题生成的
+场景都含 `MathTex`/`Tex`/`Title`（`main.py` `ManimAnimator._render_code`），manim 排版公式要调 `latex`，
+而机器上**没装 LaTeX**，故每次数学渲染必失败；"未知错误"是 `manim_render.py` 把 manim 的 Rich 框线报错
+`[-600:]` 截断后剩空串的兜底文案。**判分/共识/诊断内核零改动。**
+
+- **① 安装 LaTeX（basic MiKTeX，系统级）**：`choco install miktex` → `C:\Program Files\MiKTeX\...\bin\x64`
+  （已在机器 PATH，start.bat 起的新 shell 可见 `latex`/`dvisvgm`）。开 `[MPM]AutoInstall=1` 按需补包；应用
+  模板所需宏包已预热缓存，**无代理/离线**重跑新公式仍 `status:"ok"`。下载走用户 clash 代理。
+- **② `manim_render.py` 加固（跨平台可移植）**：新增 `latex_available()`（探 `latex`/`xelatex`/`pdflatex`/
+  `lualatex`，`shutil.which` 跨 MiKTeX/TeX Live/MacTeX/TinyTeX）+ `_needs_latex()`（静态检出 MathTex/Tex/
+  Title/TransformMatchingTex）——**缺 LaTeX 时快速失败**并给**分平台**安装提示（Win/macOS/Linux），不空跑
+  子进程；`_clean_tail()` 剥 Rich 框线字符让**真实错误浮现**（如 "LaTeX compilation error: Missing $"），
+  告别"未知错误"；LaTeX 编译失败（缺宏包/语法错）与缺发行版分别给不同文案；子进程 `encoding=utf-8,
+  errors=replace` 防编码错乱盖住真错；`status()` 增 `latex` 布尔字段。前端 `ManimView` 本就展示 `reason`，
+  这些提示直达用户并优雅回退浏览器故事板。
+- **③ 跨平台启动脚本 `start.sh`**（macOS/Linux 对应 `start.bat`）：venv 引导 + 从 imageio-ffmpeg 软链本地
+  `ffmpeg` + LaTeX 缺失非致命提示 + 后端后台/前端前台启动。
+- **验收（运行—观测）**：用应用**真实模板场景**（Title+MathTex+Tex+TransformMatchingTex）跑 `manim_render.
+  render()` → `status:"ok"`、64KB 真 MP4；**无代理**下渲染新公式 `\frac{x}{2}=5` 仍 `status:"ok"`（宏包本地
+  命中）；`_needs_latex`/`_clean_tail`/`latex_install_hint` 离线单测全过；模块 import + `py_compile` 通过。
+
 ## v0.4.7a — 公共聊天控件补全（用户反馈）：恢复「渲染方式」下拉 + 「换行键」下拉 + 「允许识别」多选表单
 
 补齐 `docs/DEVELOPMENT_PLAN.md` §C-公共 里聊天输入控件规定、但此前未落地的三件套（`ChatBox` 底部一排：
