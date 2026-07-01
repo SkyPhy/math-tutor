@@ -11,6 +11,28 @@
 
 ---
 
+## v0.4.8c — Manim 中文渲染修复（用户反馈 UnicodeDecodeError）：中文走 Text()，MathTex 只放 ASCII
+
+修第二类「Manim 渲染失败」：报错是 `UnicodeDecodeError ... tex_file_writing.py`，真凶是**中文被放进了
+`MathTex`/`Tex`/`Title`**。基础版 `latex` 引擎无法排版 CJK → 编译失败 → 更糟的是 manim 自己读 MiKTeX 的
+GBK `.log` 时按 UTF-8 解码又崩了，把真因盖住。已复现确认：`Tex('连续…')`→error；`Text('连续…')`+
+`MathTex('E=6')`→ok。**判分/共识/诊断内核零改动。**
+
+- **模板（`main.py ManimAnimator`）**：新增 `_is_ascii()` + `_formula()`；`_render_code` 把 `Title(...)` →
+  `Text(...).to_edge(UP)`、字幕 `Tex(action)` → `Text(action)`（action 是中文步骤说明）；**公式按内容择器**：
+  ASCII 数学用 `MathTex`，含 CJK 则用 `Text`——这样中文应用题（`eq_latex` 回退成中文原题）也能渲染而非崩。
+  两侧都是 Tex 才用 `TransformMatchingTex`，否则退回 `ReplacementTransform`（任意 mobject 可用，且正确把旧式
+  换下、新式加上，`eq = step_eq` 仍成立）。
+- **AI 提示（`prompts.py build_manim_prompt`）**：加**关键规则**——`MathTex`/`Tex` 经 LaTeX，**不能含中文/
+  非 ASCII**；一切文字/中文标题字幕用 `Text(...)`，`MathTex`/`Tex` 只放 ASCII 数学；不要用 `Title(...)`（LaTeX
+  底），标题用 `Text("…").to_edge(UP)`。
+- **渲染兜底（`manim_render.py`）**：新增 `_cjk_in_tex()`——渲染前**静态检出** MathTex/Tex/Title 里的 CJK，
+  直接快速失败给清晰中文提示（不空跑子进程）；子进程失败时若命中 CJK 或 `UnicodeDecodeError...tex` 也归到
+  同一提示。前端 `ManimView` 展示 `reason` 并回退浏览器故事板。
+- **验收（运行—观测）**：中文应用题模板 → `status:"ok"` 真 MP4；可解方程（ASCII MathTex + 中文 Text 字幕 +
+  5 步 TransformMatchingTex）→ `status:"ok"`；`Tex('连续…')` → 秒级 `status:"error"` + `cjk_in_tex` 清晰提示；
+  `_cjk_in_tex`/CJK 正则离线单测全过；后端 `py_compile` 通过。
+
 ## v0.4.8b — `<manim>` 可直接放 Manim 代码（用户反馈）：AI 输出代码即原样渲染，跳过二次生成
 
 顺着 v0.4.8a：让答疑/助手 AI 可在 `<manim>…</manim>` 里**直接写可运行的 Manim CE 代码**，前端识别后走

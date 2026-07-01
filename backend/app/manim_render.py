@@ -72,6 +72,25 @@ def _needs_latex(code: str) -> bool:
     return bool(_TEX_RE.search(code or ""))
 
 
+# CJK / fullwidth ranges — enough to catch Chinese text (incl. 、。：！ punctuation).
+_CJK_RE = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿＀-￯]")
+# A MathTex/Tex/Title call and (loosely) its first argument, up to the closing paren.
+_TEX_CALL_RE = re.compile(r"(?:MathTex|Tex|Title)\s*\(([^)]*)", re.S)
+
+_CJK_IN_TEX_MSG = (
+    "动画渲染失败：场景把中文（或其他非 ASCII 文本）放进了 MathTex/Tex/Title —— 基础版 "
+    "LaTeX 无法排版中文。中文/文字请用 Text(...) 显示，MathTex/Tex 只放 ASCII 数学公式。"
+    "已回退到浏览器故事板。"
+)
+
+
+def _cjk_in_tex(code: str) -> bool:
+    """True if any MathTex/Tex/Title call contains a CJK character — that combination
+    crashes the LaTeX pass on the base install (and manim's own error handler then dies
+    reading the GBK .log as UTF-8). Detect it up front to give a clear reason."""
+    return any(_CJK_RE.search(m.group(1)) for m in _TEX_CALL_RE.finditer(code or ""))
+
+
 def latex_install_hint() -> str:
     """Per-OS, actionable install guidance — surfaced when a MathTex/Tex scene can't
     render because no LaTeX distribution is present (keeps the app portable)."""
@@ -179,6 +198,13 @@ def render(*,
                           f"当前环境未检测到 LaTeX。{latex_install_hint()}"
                           "已回退到浏览器故事板。"}
 
+    # Fast fail: Chinese inside MathTex/Tex/Title can't compile (base LaTeX has no CJK)
+    # and, worse, crashes manim's own error handler (reads the GBK .log as UTF-8 →
+    # UnicodeDecodeError), masking the cause. Catch it before spending a subprocess.
+    if _cjk_in_tex(code):
+        return {"status": "error", "manim_code": code, "provider": provider,
+                "scene": scene, "cjk_in_tex": True, "reason": _CJK_IN_TEX_MSG}
+
     return _render_subprocess(code, scene, timeout or RENDER_TIMEOUT, provider)
 
 
@@ -218,9 +244,15 @@ def _render_subprocess(code: str, scene: str, timeout: int, provider: str) -> Di
                               encoding="utf-8", errors="replace", timeout=timeout)
         if proc.returncode != 0:
             raw = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+            low = raw.lower()
+            # CJK-in-LaTeX: either our static check catches it, or manim's log-reader
+            # blows up (UnicodeDecodeError in tex_file_writing) — both mean the same fix.
+            if _cjk_in_tex(code) or ("unicodedecodeerror" in low
+                                     and "tex" in low):
+                return {"status": "error", "manim_code": code, "provider": provider,
+                        "scene": scene, "cjk_in_tex": True, "reason": _CJK_IN_TEX_MSG}
             # A LaTeX compile/lookup failure (missing distro, missing package, bad
             # formula) is by far the most common cause — surface it plainly.
-            low = raw.lower()
             # Signatures of a distro/binary being absent vs. a compile-time failure.
             _MISSING = ("winerror 2", "no such file", "not found", "returned non-zero")
             _COMPILE = ("latex compilation error", "missing $", "! ", "undefined control")

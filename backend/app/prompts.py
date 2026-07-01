@@ -433,9 +433,17 @@ STRICT output rules:
 - Output ONLY Python code — no Markdown fences, no prose, no explanation before or after.
 - Start with `from manim import *` and define exactly one class named `{scene_name}(Scene)`
   with a `construct(self)` method. Do not define other top-level scenes.
-- Use only standard, always-available mobjects/animations: Text, Tex, MathTex, Title,
+- Use only standard, always-available mobjects/animations: Text, MathTex, Tex,
   Write, FadeIn, FadeOut, Transform, TransformMatchingTex, Create, SurroundingRectangle,
   self.play, self.wait. Avoid external assets, images, SVGs, plugins, or network access.
+- **CRITICAL — text vs. formula.** `MathTex`/`Tex` are typeset by LaTeX, which on this
+  server CANNOT render Chinese / any non-ASCII text (the render crashes). So:
+    • ALL natural-language labels, captions, titles — and anything containing Chinese or
+      other non-ASCII characters — MUST use `Text(...)` (Pango, renders CJK fine).
+    • `MathTex`/`Tex` may contain ONLY ASCII mathematical notation (e.g. `x^2`,
+      `\\frac{{a}}{{b}}`, `\\int_0^1`). Never put Chinese inside MathTex/Tex.
+    • Do NOT use `Title(...)` (it is LaTeX-based); for a heading use
+      `Text("…", font_size=40).to_edge(UP)`.
 - Put every LaTeX formula in MathTex/Tex with correct escaping; keep the whole scene
   under ~40 lines and under ~15 seconds of animation so it renders fast.
 - Keep captions short; the goal is a clear, correct, step-by-step visual — not flashy.
