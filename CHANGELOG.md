@@ -11,6 +11,23 @@
 
 ---
 
+## v0.4.8b — `<manim>` 可直接放 Manim 代码（用户反馈）：AI 输出代码即原样渲染，跳过二次生成
+
+顺着 v0.4.8a：让答疑/助手 AI 可在 `<manim>…</manim>` 里**直接写可运行的 Manim CE 代码**，前端识别后走
+`manim_code` 原样渲染（而非当自然语言 `spec` 再让后端二次生成代码）——更快、AI 对动画更可控。**判分/共识/
+诊断内核零改动；渲染管线（v0.4.8a）零改动，仅调整"什么进 `manim_code` vs `spec`"。**
+
+- **后端提示（`prompts.py` 四处）**：`build_chat_system`、`build_assistant_chat_system`、逐行批改
+  (`build_line_analysis`) 的规则与其 docstring——`<manim>` 块内容从"**一两句话**说明"放宽为"**二选一**：
+  一两句话说明 **或** 可运行 Manim CE 代码（`from manim import *` + 恰好一个 `class …(Scene)`）"；应用对代码
+  原样渲染，只给说明时才自动生成。
+- **前端识别归一（`ManimView.tsx`）**：把原本散在 `ChatBox` 里的 `looksLikeManimCode()` 提取并导出，新增
+  `manimProps(content)` → 返回 `{code}` 或 `{spec}`。`ChatBox`（聊天回复里的 `<manim>` 段）与 `AssistantScreen`
+  （逐行批改的 `focusLine.manim`）**共用同一判定**——此前 `AssistantScreen` 恒当 `spec`，现也能识别代码走
+  `manim_code`。
+- **验收**：`tsc --noEmit` 0 错、`vite build` 成功；`prompts.py` `py_compile` 通过；`manim_render.render(
+  manim_code=…)` 早已验证可把现成代码渲成真 MP4（v0.4.8a）。
+
 ## v0.4.8a — Manim 渲染修复（用户反馈「渲染失败：未知错误」）：装 LaTeX + 缺失可诊断 + 跨平台可移植
 
 修「Manim 渲染失败：未知错误」。**根因不是 manim/ffmpeg**——纯文本场景一直能出片；应用为每题生成的

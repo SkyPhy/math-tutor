@@ -134,10 +134,12 @@ Guidelines:{special_note}
   beyond that, reason carefully on your own.
 - Use LaTeX in \\( ... \\) for inline math (the UI renders MathJax).
 - When a picture or animation would genuinely help (a shape, a graph, a moving
-  process), FIRST think about what to show, then include a short storyboard note
-  wrapped in <manim>…</manim> describing the animation in one or two sentences
-  (e.g. <manim>用天平演示等式两边同时减 4 保持平衡</manim>). The app renders it into an
-  actual animation; add at most one such block and only when it truly aids understanding.
+  process), FIRST think about what to show, then include ONE <manim>…</manim> block.
+  Its content may be EITHER a one-or-two-sentence description of the animation
+  (e.g. <manim>用天平演示等式两边同时减 4 保持平衡</manim>) OR ready-to-run Manim CE code
+  (start it with `from manim import *` and exactly one `class …(Scene)`). The app
+  renders code as-is and, for a description, generates the code for you. Add at most
+  one such block and only when it truly aids understanding.
 - Keep replies focused and conversational — usually 1–4 sentences.
 - Stay on mathematics and learning; gently redirect off-topic requests."""
 
@@ -303,9 +305,10 @@ def build_line_analysis_prompt(problem: str, lines: List[str],
     a genuinely improvable point — and NOTHING (has_issue=false, analysis="") where
     the step is fine, so the assistant's right column stays blank on correct rows.
 
-    A tricky line may optionally carry a ``<manim>…</manim>`` storyboard note (a short
-    natural-language description of an animation that would clarify it); the backend
-    lifts it into the row's ``manim`` field (real rendering is a later step, v0.4.5b).
+    A tricky line may optionally carry a ``<manim>…</manim>`` block — EITHER a short
+    natural-language description of a clarifying animation, OR ready-to-run Manim CE
+    code; the backend lifts it into the row's ``manim`` field (the frontend renders
+    code as-is via ``manim_code`` and generates it from a description otherwise).
 
     Output is a strict JSON OBJECT so the backend can align by idx and show a summary.
     """
@@ -329,8 +332,9 @@ def build_line_analysis_prompt(problem: str, lines: List[str],
   必要时点明正确做法，但不要长篇大论（1–3 句，中文）。
 - 若某行**没有问题**，必须留空：`has_issue` 为 false 且 `analysis` 为 ""。**不要为了凑话而给正确的行写评语。**
 - 行内数学一律用 LaTeX 的 \\( ... \\) 包裹，前端会用 MathJax 渲染。
-- 对个别抽象/易错、用动画能讲清楚的行，可在该行 analysis 末尾附一个
-  `<manim>用一句话描述这段动画讲什么</manim>`（可选、宁缺毋滥）。
+- 对个别抽象/易错、用动画能讲清楚的行，可在该行 analysis 末尾附一个 `<manim>…</manim>`——里面**要么**
+  一句话描述这段动画讲什么，**要么**直接给可运行的 Manim CE 代码（`from manim import *` + 一个
+  `class …(Scene)`，应用会原样渲染）。可选、宁缺毋滥。
 - 最后给一句总体 summary：整体思路对不对、主要问题在哪、下一步建议。
 
 只输出一个严格 JSON 对象，不要解释、前后缀或 Markdown 代码块，格式如下：
@@ -387,9 +391,10 @@ def build_assistant_chat_system(problem: str,
 - **用学生提问所用的语言回答**：学生用中文就用中文，用英文就用英文（逐轮跟随）。
 - 苏格拉底式：优先引导学生自己想通，而不是直接把答案塞给他；若学生明确要答案可以给，但仍要讲清道理与检验方法。
 - 行内数学用 LaTeX 的 \\( ... \\) 包裹（前端 MathJax 渲染）。
-- 当"用图/动画会更好懂"时（图形、函数图像、某个变化过程），**先想清楚要演示什么**，再附一个用
-  `<manim>…</manim>` 包裹的**一两句话**动画说明（例：`<manim>用天平演示等式两边同时减 4 保持平衡</manim>`）——
-  应用会据此渲染成真动画；在确实有助于理解时才加。
+- 当"用图/动画会更好懂"时（图形、函数图像、某个变化过程），**先想清楚要演示什么**，再附**一个**
+  `<manim>…</manim>` 块。块内**二选一**：既可写**一两句话**的动画说明（例：`<manim>用天平演示等式两边同时减
+  4 保持平衡</manim>`），也可**直接写可运行的 Manim CE 代码**（以 `from manim import *` 开头、恰好一个
+  `class …(Scene)`）。应用会把代码原样渲染；只给说明时则自动为你生成代码。确实有助于理解时才加。
 - 回答简洁、专业严谨而易懂，通常 1–4 句，聚焦学生问的那一步。{special_note}{mode_note}
 - 只谈数学与学习，礼貌地把跑题的请求带回来。"""
 

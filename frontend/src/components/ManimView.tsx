@@ -11,6 +11,19 @@ import type { ManimFrame, ManimRenderResp } from '../types';
 // stepped through in-page) — so the affordance never errors out ("无 Manim 时自动回落
 // 且不报错").
 //
+// Does this <manim> payload look like ready Manim CE source (vs. a prose note)? When
+// it does we pass it straight through as `code` (→ backend `manim_code`, rendered
+// as-is); otherwise it's a `spec` the backend turns into code. Shared by every call
+// site that surfaces a <manim> block (ChatBox replies, AssistantScreen line notes).
+export function looksLikeManimCode(s: string): boolean {
+  return /from\s+manim\s+import|class\s+\w+\s*\(\s*Scene\s*\)|self\.play\s*\(/.test(s || '');
+}
+
+// Turn a raw <manim> block payload into the right prop for <ManimView>.
+export function manimProps(content: string): { code: string } | { spec: string } {
+  return looksLikeManimCode(content) ? { code: content } : { spec: content };
+}
+
 // `spec` = a natural-language description of the animation; `code` = ready Manim CE
 // source (rendered as-is when present). Pass one or the other.
 export function ManimView({ spec, code, expression }: { spec?: string; code?: string; expression: string }) {

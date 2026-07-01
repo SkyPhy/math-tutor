@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ChatBox } from '../components/ChatBox';
 import type { SendMeta } from '../components/ChatBox';
-import { ManimView } from '../components/ManimView';
+import { ManimView, manimProps } from '../components/ManimView';
 import { SCREEN_DEFS } from '../config';
 import { useStore } from '../store';
 import { assistantAnalyze, assistantAsk } from '../api';
@@ -192,13 +192,14 @@ export function AssistantScreen({ active }: { active: boolean }) {
             {focusLine ? (
               <div className="assist-followup">
                 {focusLine.manim ? (
-                  // The clicked line carries a <manim> storyboard note — offer to animate it.
+                  // The clicked line carries a <manim> block — a prose note OR ready
+                  // Manim code; manimProps() routes code as-is, prose as a spec.
                   <div
                     className="assist-manim-wrap"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <ManimView
-                      spec={focusLine.manim}
+                      {...manimProps(focusLine.manim)}
                       expression={problemText || focusLine.content}
                     />
                   </div>

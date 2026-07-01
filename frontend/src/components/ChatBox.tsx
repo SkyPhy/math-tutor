@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { renderMarkdownMath, renderSource, escapeHtml } from '../lib/markdown';
 import { useMathJax } from '../hooks/useMathJax';
-import { ManimView } from './ManimView';
+import { ManimView, manimProps } from './ManimView';
 import { EditorToolbar } from './EditorToolbar';
 import type { ChatMsg, RenderMode } from '../types';
 
@@ -24,10 +24,6 @@ export const SPECIAL_SYMBOLS: string[] = [
 // or ready Manim code). We split those out and render each as a <ManimView> instead
 // of dumping the raw tag into the message text (issue #4: "识别到 <manim> 前端渲染动画").
 const MANIM_RE = /<manim>([\s\S]*?)<\/manim>/gi;
-
-function looksLikeManimCode(s: string): boolean {
-  return /from\s+manim\s+import|class\s+\w+\s*\(\s*Scene\s*\)|self\.play\s*\(/.test(s);
-}
 
 type Segment = { type: 'text' | 'manim'; value: string };
 
@@ -74,11 +70,7 @@ function MessageBody({
     <>
       {segments.map((seg, i) =>
         seg.type === 'manim' ? (
-          <ManimView
-            key={i}
-            expression={manimExpression}
-            {...(looksLikeManimCode(seg.value) ? { code: seg.value } : { spec: seg.value })}
-          />
+          <ManimView key={i} expression={manimExpression} {...manimProps(seg.value)} />
         ) : seg.value.trim() ? (
           <div key={i} dangerouslySetInnerHTML={{ __html: renderMarkdownMath(seg.value) }} />
         ) : null,
