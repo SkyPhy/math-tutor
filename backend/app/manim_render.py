@@ -43,6 +43,25 @@ RENDER_TIMEOUT = int(os.environ.get("MANIM_RENDER_TIMEOUT", "150"))
 _SCENE_RE = re.compile(r"class\s+(\w+)\s*\(\s*Scene\s*\)")
 _DEFAULT_SCENE = "SolveScene"
 
+# User-selectable render quality → (manim CLI flag, human resolution/fps). Higher =
+# clearer but slower + bigger file. Keys are the stable API values the frontend sends.
+QUALITY_FLAGS: Dict[str, str] = {
+    "low": "-ql",     # 480p15  — fastest
+    "medium": "-qm",  # 720p30
+    "high": "-qh",    # 1080p60
+    "2k": "-qp",      # 1440p60
+    "4k": "-qk",      # 2160p60 — slowest, may time out on complex scenes
+}
+# Bumped from the old hard-coded 480p15: a clearer baseline that still renders quickly.
+DEFAULT_QUALITY = os.environ.get("MANIM_RENDER_QUALITY", "medium")
+
+
+def _quality_flag(quality: Optional[str]) -> str:
+    """Map a requested quality key to its manim flag, defaulting safely (never trust an
+    arbitrary string onto the command line)."""
+    q = (quality or DEFAULT_QUALITY).strip().lower()
+    return QUALITY_FLAGS.get(q, QUALITY_FLAGS.get(DEFAULT_QUALITY, "-qm"))
+
 # Any of these mobjects typeset via LaTeX (manim shells out to `latex`/`dvisvgm`).
 # `Title` too — it subclasses Tex. Scenes using only Text/MarkupText need no LaTeX.
 _TEX_RE = re.compile(r"\b(?:MathTex|Tex|Title|TransformMatchingTex)\b")
@@ -152,6 +171,7 @@ def render(*,
            scene_name: str = _DEFAULT_SCENE,
            session_id: str = "manim",
            model: Optional[str] = None,
+           quality: Optional[str] = None,
            timeout: Optional[int] = None) -> Dict[str, Any]:
     """Produce a real MP4 for the animation, or degrade to the storyboard.
 
@@ -205,7 +225,8 @@ def render(*,
         return {"status": "error", "manim_code": code, "provider": provider,
                 "scene": scene, "cjk_in_tex": True, "reason": _CJK_IN_TEX_MSG}
 
-    return _render_subprocess(code, scene, timeout or RENDER_TIMEOUT, provider)
+    return _render_subprocess(code, scene, timeout or RENDER_TIMEOUT, provider,
+                              _quality_flag(quality))
 
 
 # Rich renders tracebacks inside box-drawing frames; strip that furniture so the real
@@ -227,9 +248,10 @@ def _clean_tail(raw: str, limit: int = 500) -> str:
     return text[-limit:]
 
 
-def _render_subprocess(code: str, scene: str, timeout: int, provider: str) -> Dict[str, Any]:
-    """Write the scene to a temp dir, invoke `manim -ql`, copy the MP4 into the served
-    MEDIA_DIR. Never raises — failures come back as ``status:"error"``."""
+def _render_subprocess(code: str, scene: str, timeout: int, provider: str,
+                       quality_flag: str = "-qm") -> Dict[str, Any]:
+    """Write the scene to a temp dir, invoke `manim <quality>`, copy the MP4 into the
+    served MEDIA_DIR. Never raises — failures come back as ``status:"error"``."""
     import tempfile
     work = tempfile.mkdtemp(prefix="manim_")
     scene_file = os.path.join(work, "scene.py")
@@ -237,7 +259,8 @@ def _render_subprocess(code: str, scene: str, timeout: int, provider: str) -> Di
     try:
         with open(scene_file, "w", encoding="utf-8") as fh:
             fh.write(code)
-        cmd = ["manim", "-ql", "--format", "mp4", "--media_dir", tmp_media, scene_file, scene]
+        cmd = ["manim", quality_flag, "--format", "mp4", "--media_dir", tmp_media,
+               scene_file, scene]
         # errors="replace": manim's output can mix encodings on Windows; never let a
         # decode error mask the real failure with a generic "渲染出错".
         proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True,

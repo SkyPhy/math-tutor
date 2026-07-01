@@ -253,6 +253,7 @@ class ManimRenderRequest(BaseModel):
     manim_code: Optional[str] = None       # pre-generated Manim code to render as-is (skips AI gen)
     session_id: Optional[str] = None
     model: Optional[str] = None
+    quality: Optional[str] = None          # render clarity: low|medium|high|2k|4k (default medium)
 
 # ── Auth request bodies ──
 class SignUpRequest(BaseModel):
@@ -2818,6 +2819,7 @@ async def manim_render_endpoint(req: ManimRenderRequest):
         template_code=board.get("manim_code"),
         session_id=req.session_id or "manim",
         model=req.model,
+        quality=req.quality,
     )
 
     # Attach the storyboard + expression so the UI can degrade to in-page frames.

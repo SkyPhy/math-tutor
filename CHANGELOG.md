@@ -11,6 +11,22 @@
 
 ---
 
+## v0.4.8d — Manim 渲染清晰度可选（用户反馈）：默认提到 720p，可选 480p→4K
+
+此前渲染写死 `manim -ql`（480p15，最低档）。现**清晰度可由用户下拉选择**，默认档也从 480p 提到
+**720p30**（更清晰且仍渲染得快）。**判分/共识/诊断内核零改动；渲染管线仅参数化质量档。**
+
+- **后端（`manim_render.py`）**：新增 `QUALITY_FLAGS`（`low -ql`480p15 / `medium -qm`720p30 /
+  `high -qh`1080p60 / `2k -qp`1440p60 / `4k -qk`2160p60）+ `_quality_flag()`（**只映射白名单键**，绝不把任意
+  字符串拼到命令行）；`render()`/`_render_subprocess()` 接受 `quality`，替换写死的 `-ql`。默认 `medium`，可用
+  `MANIM_RENDER_QUALITY` 环境变量覆盖。
+- **接口（`main.py`）**：`ManimRenderRequest` 加 `quality` 字段，透传 `render()`。
+- **前端（`ManimView.tsx` + `api.ts` + `styles.css`）**：生成动画按钮旁加**清晰度下拉**（流畅 480p / 清晰
+  720p / 高清 1080p / 超清 1440p / 4K 2160p），默认「清晰 720p」；`ManimRenderReq` 加 `ManimQuality` 类型与
+  `quality` 字段。tooltip 提示"越高越清晰但更慢、文件更大"。
+- **验收（运行—观测）**：同一场景 `quality=low`→**854x480**、`high`→**1920x1080**、缺省→**1280x720**（ffmpeg
+  探测分辨率确认档位生效）；`tsc --noEmit` 0 错、`vite build` 成功、后端 `py_compile` 通过。
+
 ## v0.4.8c — Manim 中文渲染修复（用户反馈 UnicodeDecodeError）：中文走 Text()，MathTex 只放 ASCII
 
 修第二类「Manim 渲染失败」：报错是 `UnicodeDecodeError ... tex_file_writing.py`，真凶是**中文被放进了

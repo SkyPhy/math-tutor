@@ -221,12 +221,15 @@ export async function assistantAsk(body: AssistAskReq): Promise<AssistAskResp> {
 }
 
 // ── /manim/render (④ 助手屏 <manim> blocks, v0.4.5b) ──────────────────────────
+export type ManimQuality = 'low' | 'medium' | 'high' | '2k' | '4k';
+
 export interface ManimRenderReq {
   expression?: string;
   spec?: string;             // the natural-language <manim> note
   manim_code?: string;
   session_id?: string;
   model?: string | null;
+  quality?: ManimQuality;    // render clarity (default medium ~720p30)
 }
 
 // POST /manim/render — real MP4 when the server has Manim CE, else status != 'ok'

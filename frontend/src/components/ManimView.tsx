@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react';
 import { manimRender } from '../api';
+import type { ManimQuality } from '../api';
 import { API_BASE } from '../config';
 import { useMathJax } from '../hooks/useMathJax';
 import type { ManimFrame, ManimRenderResp } from '../types';
+
+// User-selectable render clarity. Higher = sharper but slower + larger file; keys must
+// match the backend QUALITY_FLAGS map. Default medium (720p30) — clearer than manim's
+// -ql baseline while still rendering quickly.
+const QUALITY_OPTS: Array<{ value: ManimQuality; label: string }> = [
+  { value: 'low', label: '流畅 480p' },
+  { value: 'medium', label: '清晰 720p' },
+  { value: 'high', label: '高清 1080p' },
+  { value: '2k', label: '超清 1440p' },
+  { value: '4k', label: '4K 2160p' },
+];
 
 // ④ 助手屏 / ⑤ 答疑屏 <manim> block (v0.4.5b, extended v0.4.6). A line-analysis or a
 // chat reply may attach a storyboard note OR raw Manim code; this turns it into an
@@ -31,6 +43,7 @@ export function ManimView({ spec, code, expression }: { spec?: string; code?: st
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ManimRenderResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [quality, setQuality] = useState<ManimQuality>('medium');
 
   const label = (spec || '形象化演示').trim();
 
@@ -40,7 +53,7 @@ export function ManimView({ spec, code, expression }: { spec?: string; code?: st
     setLoading(true);
     setErr(null);
     try {
-      const res = await manimRender({ expression, spec, manim_code: code });
+      const res = await manimRender({ expression, spec, manim_code: code, quality });
       setData(res);
     } catch (e) {
       setErr('生成失败：' + (e as Error).message);
@@ -54,9 +67,24 @@ export function ManimView({ spec, code, expression }: { spec?: string; code?: st
       <div className="manim-head">
         <span className="manim-spec">🎬 {label}</span>
         {!open || err ? (
-          <button className="chip-btn manim-run" onClick={run} disabled={loading}>
-            {loading ? '生成中…' : data ? '重新生成' : '▶ 生成动画'}
-          </button>
+          <span className="manim-actions">
+            <select
+              className="manim-quality"
+              value={quality}
+              onChange={(e) => setQuality(e.target.value as ManimQuality)}
+              disabled={loading}
+              title="渲染清晰度：越高越清晰，但渲染更慢、文件更大"
+            >
+              {QUALITY_OPTS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <button className="chip-btn manim-run" onClick={run} disabled={loading}>
+              {loading ? '生成中…' : data ? '重新生成' : '▶ 生成动画'}
+            </button>
+          </span>
         ) : null}
       </div>
 

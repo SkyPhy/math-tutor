@@ -1271,6 +1271,13 @@
 }
 .manim-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .manim-spec { color: var(--accent-purple); font-size: 0.9rem; }
+.manim-actions { display: inline-flex; align-items: center; gap: 8px; }
+.manim-quality {
+    background: rgba(139, 92, 246, 0.08); color: var(--text-main);
+    border: 1px solid var(--glass-border); border-radius: 10px;
+    padding: 5px 8px; font-size: 0.82rem; cursor: pointer;
+}
+.manim-quality:disabled { opacity: 0.5; cursor: default; }
 .manim-run { white-space: nowrap; }
 .manim-note { margin: 0; color: var(--text-dim); font-size: 0.84rem; }
 .manim-video-wrap { border-radius: 12px; overflow: hidden; background: #000; }
