@@ -1,4 +1,4 @@
-import { MathText } from './MathText';
+import { ProblemBody } from './ProblemBody';
 import { PracticeControls } from './PracticeControls';
 import { SOURCES } from '../config';
 import type { Problem } from '../types';
@@ -35,7 +35,7 @@ export function ProblemCard({
 }: Props) {
   const tags = problem?.tags || [];
   const srcChip = problem?.generated
-    ? '✨ AI 新题'
+    ? 'AI 新题'
     : problem?.source === 'ai'
       ? 'AI 题库'
       : '';
@@ -57,7 +57,6 @@ export function ProblemCard({
                 const isLogic = t.dimension === '逻辑思维类型';
                 return (
                   <span key={i} className={`problem-tag ${isLogic ? 'logic' : ''}`}>
-                    {isLogic ? '🧠 ' : ''}
                     {t.tag}
                   </span>
                 );
@@ -77,18 +76,10 @@ export function ProblemCard({
         </div>
       </div>
 
-      {/* "Problem" bar — tags toggle (hidden by default) + 出题来源 picker. */}
+      {/* "Problem" bar — tags toggle (hidden by default) + 出题来源 picker. Kept
+          compact (controls grouped, not stretched edge-to-edge). */}
       <div className="problem-source-row">
         <span className="problem-row-label">Problem</span>
-        <button
-          id="tags-toggle-btn"
-          className="chip-btn"
-          onClick={onToggleTags}
-          title="显示 / 隐藏本题的知识点与思维类型标签"
-        >
-          {showTags ? '🏷 隐藏标签' : '🏷 显示标签'}
-        </button>
-        <span className="problem-row-spacer" />
         <label className="pc-label">
           来源
           <select className="pc-select" value={source} onChange={(e) => onSourceChange(e.target.value)}>
@@ -99,19 +90,30 @@ export function ProblemCard({
             ))}
           </select>
         </label>
+        <button
+          id="tags-toggle-btn"
+          className="chip-btn"
+          onClick={onToggleTags}
+          title="显示 / 隐藏本题的知识点与思维类型标签"
+        >
+          {showTags ? '隐藏标签' : '显示标签'}
+        </button>
       </div>
 
       <h2 id="problem-title" className="problem-title">
         {title}
       </h2>
-      <p id="problem-statement" className="problem-statement">
-        {error ? (
+      {error ? (
+        <p id="problem-statement" className="problem-statement">
           <span style={{ color: '#ef4444' }}>请确认后端已在 8000 端口运行，然后点「🎲 换一题」。</span>
-        ) : (
-          problem?.statement || ''
-        )}
-      </p>
-      <MathText latex={problem?.latex} className="problem-latex" />
+        </p>
+      ) : (
+        <ProblemBody
+          statement={problem?.statement}
+          latex={problem?.latex}
+          className="problem-statement problem-body"
+        />
+      )}
       {problem?.disclaimer ? <p className="problem-hint-line">{problem.disclaimer}</p> : null}
       <p className="problem-hint-line">✍️ 在白板上作答，完成后点下方「提交 / AI 助手」，或「提问 / 不会做」。</p>
 

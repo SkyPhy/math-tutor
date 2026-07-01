@@ -31,7 +31,7 @@ export function PracticeControls({
   return (
     <div className="practice-controls" id="practice-controls">
       <label className="pc-label">
-        🧠 思维类型
+        思维类型
         <select className="pc-select" value={focusLogic} onChange={(e) => setFocusLogic(e.target.value)}>
           <option value="">不限</option>
           {Object.keys(logicGroups).map((family) => (

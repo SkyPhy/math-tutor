@@ -96,8 +96,13 @@ Rules:
 def build_chat_system(
     expression: str,
     engine_result: Optional[Dict[str, Any]] = None,
+    allow_special: Optional[List[str]] = None,
 ) -> str:
-    """System prompt for the free-form chat box."""
+    """System prompt for the free-form chat box.
+
+    ``allow_special`` (from the shared chat control's 「允许识别」 multi-select) lists
+    the special symbols / regex / escape forms the student has opted to have taken
+    literally, so the model knows those forms are intended rather than typos."""
     gt = ""
     if engine_result:
         gt = ("\n\nSYMPY REFERENCE for the current problem (a reliable check "
@@ -109,16 +114,30 @@ def build_chat_system(
         else "The student has not entered a specific problem yet."
     )
 
+    special_note = ""
+    if allow_special:
+        special_note = (
+            "\n- The student allows these special symbols / expressions and wants them "
+            "read literally (not treated as typos): " + " ".join(allow_special)
+        )
+
     return f"""You are a friendly, rigorous mathematics tutor chatting with a
 student. {context_line}{gt}
 
-Guidelines:
+Guidelines:{special_note}
+- Reply in the SAME language the student writes in: if their message is in Chinese
+  answer in Chinese, if in English answer in English (match them turn by turn).
 - Favour the Socratic style: help the student reason rather than dumping answers.
   If they explicitly ask for the final answer, you may give it, but still show
   the reasoning and how to verify it.
 - Where the SymPy reference has a verified result, stay consistent with it;
   beyond that, reason carefully on your own.
 - Use LaTeX in \\( ... \\) for inline math (the UI renders MathJax).
+- When a picture or animation would genuinely help (a shape, a graph, a moving
+  process), FIRST think about what to show, then include a short storyboard note
+  wrapped in <manim>…</manim> describing the animation in one or two sentences
+  (e.g. <manim>用天平演示等式两边同时减 4 保持平衡</manim>). The app renders it into an
+  actual animation; add at most one such block and only when it truly aids understanding.
 - Keep replies focused and conversational — usually 1–4 sentences.
 - Stay on mathematics and learning; gently redirect off-topic requests."""
 
@@ -275,6 +294,106 @@ def build_tagged_generation_prompt(knowledge_tags: List[str],
 - 务必输出合法 JSON，字符串中不要出现未转义的引号或反斜杠。"""
 
 
+def build_line_analysis_prompt(problem: str, lines: List[str],
+                               render_mode: Optional[str] = None) -> str:
+    """System prompt for the ④ AI 助手屏 line-by-line analysis (v0.4.3a).
+
+    The student's corrected work is split into numbered lines (1-based). The model
+    must return, ALIGNED to each line, an analysis ONLY where a line has an error or
+    a genuinely improvable point — and NOTHING (has_issue=false, analysis="") where
+    the step is fine, so the assistant's right column stays blank on correct rows.
+
+    A tricky line may optionally carry a ``<manim>…</manim>`` storyboard note (a short
+    natural-language description of an animation that would clarify it); the backend
+    lifts it into the row's ``manim`` field (real rendering is a later step, v0.4.5b).
+
+    Output is a strict JSON OBJECT so the backend can align by idx and show a summary.
+    """
+    numbered = "\n".join(f"  {i + 1}. {ln}" for i, ln in enumerate(lines)) or "  （空）"
+    mode_note = ""
+    if render_mode == "2":
+        mode_note = "\n学生的书写按「源码风」保存，可能含原始 Markdown/LaTeX 记号，请照原样理解。"
+    elif render_mode == "3":
+        mode_note = "\n学生的书写是纯文本，数学符号可能用键盘近似写法（如 * 表示乘、^ 表示乘方），请据此理解。"
+
+    return f"""你是一位耐心、严谨的数学老师，正在**逐行批改**学生的解题过程。
+
+题目：
+{problem or "（未提供题面，请仅就学生书写的推导本身判断每一步是否成立）"}
+
+学生的作答（已按行编号，idx 从 1 开始）：
+{numbered}{mode_note}
+
+请对**每一行**判断这一步是否正确、是否有更好的写法或需要提醒的地方：
+- 只有当某行**确实有错误、或有明确可改进/易错点**时，才写分析；分析要**指出问题并引导思考**，
+  必要时点明正确做法，但不要长篇大论（1–3 句，中文）。
+- 若某行**没有问题**，必须留空：`has_issue` 为 false 且 `analysis` 为 ""。**不要为了凑话而给正确的行写评语。**
+- 行内数学一律用 LaTeX 的 \\( ... \\) 包裹，前端会用 MathJax 渲染。
+- 对个别抽象/易错、用动画能讲清楚的行，可在该行 analysis 末尾附一个
+  `<manim>用一句话描述这段动画讲什么</manim>`（可选、宁缺毋滥）。
+- 最后给一句总体 summary：整体思路对不对、主要问题在哪、下一步建议。
+
+只输出一个严格 JSON 对象，不要解释、前后缀或 Markdown 代码块，格式如下：
+{{
+  "summary": "<一句话总体点评>",
+  "lines": [
+    {{"idx": <行号整数，对应上面的编号>, "has_issue": <true/false>,
+      "analysis": "<该行的分析；无问题则为空字符串>"}}
+  ]
+}}
+- `lines` 至少要覆盖所有**有问题**的行；正确的行可省略或给空分析（两者都视为"这步没问题"）。
+- 务必输出合法 JSON，字符串中不要出现未转义的引号或反斜杠。"""
+
+
+def build_assistant_chat_system(problem: str,
+                                focus: Optional[Dict[str, Any]] = None,
+                                render_mode: Optional[str] = None,
+                                allow_special: Optional[List[str]] = None) -> str:
+    """System prompt for the ④ 助手屏 per-line follow-up (POST /assistant/ask).
+
+    Extends the free-form tutor chat with the ONE line the student clicked (its text
+    + the analysis already shown for it) as extra grounding, so the follow-up stays
+    about that step. ``allow_special`` lists special symbols/escapes the shared chat
+    control can render, so the model knows it may use them."""
+    context_line = (
+        f"学生正在就这道题追问：{problem}" if problem
+        else "学生还没有指定具体题目。"
+    )
+    focus_block = ""
+    if focus:
+        idx = focus.get("idx")
+        content = (focus.get("content") or "").strip()
+        analysis = (focus.get("analysis") or "").strip()
+        focus_block = (
+            f"\n\n学生点开的是**第 {idx} 行**："
+            f"\n  这一步的书写：{content}"
+            + (f"\n  你之前对这一步的分析：{analysis}" if analysis
+               else "\n  （之前没有对这一步给出分析——它大概率是对的，除非追问揭示了新问题）")
+            + "\n请围绕这一行来回答学生的追问，必要时联系上下文相邻步骤。"
+        )
+    special_note = ""
+    if allow_special:
+        special_note = (
+            "\n- 需要时可放心使用这些特殊符号（前端能正常显示）："
+            + " ".join(allow_special)
+        )
+    mode_note = ""
+    if render_mode == "3":
+        mode_note = "\n- 学生用纯文本书写，符号可能是键盘近似写法，理解时请宽容。"
+
+    return f"""你是一位友好、严谨的数学老师，正在就学生这道题的**某一步**答疑。{context_line}{focus_block}
+
+要求：
+- **用学生提问所用的语言回答**：学生用中文就用中文，用英文就用英文（逐轮跟随）。
+- 苏格拉底式：优先引导学生自己想通，而不是直接把答案塞给他；若学生明确要答案可以给，但仍要讲清道理与检验方法。
+- 行内数学用 LaTeX 的 \\( ... \\) 包裹（前端 MathJax 渲染）。
+- 当"用图/动画会更好懂"时（图形、函数图像、某个变化过程），**先想清楚要演示什么**，再附一个用
+  `<manim>…</manim>` 包裹的**一两句话**动画说明（例：`<manim>用天平演示等式两边同时减 4 保持平衡</manim>`）——
+  应用会据此渲染成真动画；在确实有助于理解时才加。
+- 回答简洁、专业严谨而易懂，通常 1–4 句，聚焦学生问的那一步。{special_note}{mode_note}
+- 只谈数学与学习，礼貌地把跑题的请求带回来。"""
+
+
 def to_messages(history: List[Dict[str, str]], user_message: str) -> List[Dict[str, str]]:
     """Build the Messages-API `messages` array from prior turns + new input.
     `history` items are {role: 'user'|'assistant', content: str}."""
@@ -286,3 +405,33 @@ def to_messages(history: List[Dict[str, str]], user_message: str) -> List[Dict[s
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": user_message})
     return messages
+
+
+def build_manim_prompt(expression: str, spec: str = "",
+                       scene_name: str = "SolveScene") -> str:
+    """System prompt to generate a self-contained Manim CE Python Scene that
+    animates a math idea (v0.4.5b). ``expression`` is the math being animated;
+    ``spec`` is the natural-language storyboard note (e.g. the ``<manim>`` block a
+    line-analysis produced). The output is rendered by ``manim_render.py`` — so it
+    must be runnable Manim Community Edition code and NOTHING else.
+
+    Kept deliberately constrained (single Scene, standard mobjects, short) so it
+    renders quickly and reliably; the browser storyboard is the fallback when Manim
+    isn't installed, so this need not be defensive about the environment."""
+    spec_line = f"\n动画要讲清楚的点（务必围绕它）：{spec}" if spec else ""
+    return f"""You are an expert Manim Community Edition (v0.18+) animator. Write ONE
+self-contained Python scene that animates the following math for a student.
+
+Math to animate: {expression or "(use the storyboard note below)"}{spec_line}
+
+STRICT output rules:
+- Output ONLY Python code — no Markdown fences, no prose, no explanation before or after.
+- Start with `from manim import *` and define exactly one class named `{scene_name}(Scene)`
+  with a `construct(self)` method. Do not define other top-level scenes.
+- Use only standard, always-available mobjects/animations: Text, Tex, MathTex, Title,
+  Write, FadeIn, FadeOut, Transform, TransformMatchingTex, Create, SurroundingRectangle,
+  self.play, self.wait. Avoid external assets, images, SVGs, plugins, or network access.
+- Put every LaTeX formula in MathTex/Tex with correct escaping; keep the whole scene
+  under ~40 lines and under ~15 seconds of animation so it renders fast.
+- Keep captions short; the goal is a clear, correct, step-by-step visual — not flashy.
+- The code must run with `manim -ql scene.py {scene_name}` on a clean install."""

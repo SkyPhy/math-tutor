@@ -19,6 +19,7 @@ Key subsystems implemented:
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -87,6 +88,21 @@ from . import diagnosis
 from . import memory as memory_store
 from .memory import memory
 
+# Personal workspace — student draft / answer library (workspace.py / workspace.db).
+# Backs the 校对屏 「存草稿 / 提交」 affordances: a corrected piece of writing is named
+# and stashed per question so the student can stop and resume ("断点续作").
+from . import workspace
+
+# AI assistant — line-by-line analysis orchestration (assistant.py). Backs the ④ AI
+# 助手屏: aligns "student work | AI analysis" line by line (blank where a step is fine)
+# and answers per-line follow-ups. Pure logic; the /assistant/* routes below delegate
+# to it (same split as workspace.py).
+from . import assistant
+
+# Manim renderer — real MP4 via Manim CE when installed, else a browser storyboard
+# (manim_render.py). Backs POST /manim/render + the <manim> blocks the assistant emits.
+from . import manim_render
+
 import json as _json
 import re as _re
 
@@ -107,6 +123,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve rendered Manim clips (v0.4.5b). /manim/render writes MP4s into
+# manim_render.MEDIA_DIR; this mount exposes them at /manim-media/<file>.mp4.
+app.mount(manim_render.MEDIA_URL, StaticFiles(directory=manim_render.MEDIA_DIR),
+          name="manim-media")
 
 
 @app.on_event("startup")
@@ -141,6 +162,9 @@ def _warmup_ocr() -> None:
     # Durable experience-memory tables (persists adaptive context across restarts).
     memory_store.init_db()
     print("[startup] Experience memory DB ready.")
+    # Personal draft/answer library (校对屏 存草稿 / 提交; 断点续作).
+    workspace.init_db()
+    print(f"[startup] Workspace DB ready ({workspace.count()} drafts).")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -190,6 +214,45 @@ class ChatRequest(BaseModel):
     expression: Optional[str] = None        # the problem being discussed (for grounding)
     model: Optional[str] = None
     history: Optional[List[Dict[str, str]]] = None  # [{role:'user'|'assistant', content}]
+    allow_special: Optional[List[str]] = None  # special symbols/regex/escapes the chat may use
+
+# ── Workspace (personal draft library) request body ──
+class WorkSaveRequest(BaseModel):
+    session_id: Optional[str] = None       # anonymous owner when not signed in
+    question_id: Optional[str] = None      # the problem this draft belongs to
+    filename: Optional[str] = None         # student-chosen name
+    content_md: str = ""                   # the corrected writing (markdown / latex)
+    render_mode: Optional[str] = None      # '1' full-render | '2' source | '3' plain
+    status: str = "tmp"                    # 'tmp' (存草稿) | 'final' (提交)
+    draft_id: Optional[str] = None         # update an existing draft in place if given
+
+# ── AI assistant (④ 助手屏) request bodies ──
+class AssistantAnalyzeRequest(BaseModel):
+    session_id: Optional[str] = None
+    question_id: Optional[str] = None      # resolve the problem text from the bank if given
+    problem: Optional[str] = None          # …or pass the problem text directly (frontend does)
+    student_work_md: str = ""              # the corrected work from the 校对屏 (markdown / latex)
+    render_mode: Optional[str] = None      # how that work was rendered ('1'|'2'|'3') — a reading hint
+    model: Optional[str] = None
+
+class AssistantAskRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+    question_id: Optional[str] = None
+    problem: Optional[str] = None
+    model: Optional[str] = None
+    history: Optional[List[Dict[str, str]]] = None      # prior turns [{role, content}]
+    focus: Optional[Dict[str, Any]] = None              # the clicked line {idx, content, analysis}
+    render_mode: Optional[str] = None
+    allow_special: Optional[List[str]] = None           # special symbols the chat control can render
+
+# ── Manim render (v0.4.5b) request body ──
+class ManimRenderRequest(BaseModel):
+    expression: Optional[str] = None       # the math to animate (drives the storyboard fallback)
+    spec: Optional[str] = None             # natural-language <manim> note (what the clip should show)
+    manim_code: Optional[str] = None       # pre-generated Manim code to render as-is (skips AI gen)
+    session_id: Optional[str] = None
+    model: Optional[str] = None
 
 # ── Auth request bodies ──
 class SignUpRequest(BaseModel):
@@ -2187,6 +2250,112 @@ def diagnosis_student(session_id: str):
     return prof
 
 
+# ── Personal workspace (校对屏 草稿库) ───────────────────────────────────────
+
+def _work_owner(user: Optional[Dict[str, Any]], session_id: Optional[str]) -> str:
+    """Scope a draft to its owner: the signed-in username, else the anonymous
+    session id, else a generic anon bucket. Mirrors the草图's 「个人 tmp 数据库」."""
+    if user and user.get("username"):
+        return f"user:{user['username']}"
+    if session_id and session_id.strip():
+        return f"sess:{session_id.strip()}"
+    return "anon"
+
+
+@app.post("/work/save")
+def work_save(req: WorkSaveRequest, authorization: Optional[str] = Header(default=None)):
+    """Save a draft from the 校对屏: 「存草稿」(status=tmp) or 「提交」(status=final).
+    Returns the stored draft so the UI can keep its id and 续作 (reopen + continue)."""
+    owner = _work_owner(optional_user(authorization), req.session_id)
+    draft = workspace.save_draft(
+        owner,
+        question_id=req.question_id,
+        filename=(req.filename or "").strip() or None,
+        content_md=req.content_md or "",
+        render_mode=req.render_mode,
+        status=req.status,
+        draft_id=req.draft_id,
+    )
+    return draft
+
+
+@app.get("/work")
+def work_list(session: Optional[str] = None, question_id: Optional[str] = None,
+              authorization: Optional[str] = Header(default=None)):
+    """List the caller's drafts (newest first), optionally scoped to one question —
+    drives the 校对屏「我的草稿」list so a saved draft can be reopened."""
+    owner = _work_owner(optional_user(authorization), session)
+    return {"drafts": workspace.list_drafts(owner, question_id)}
+
+
+@app.get("/work/{draft_id}")
+def work_get(draft_id: str, session: Optional[str] = None,
+             authorization: Optional[str] = Header(default=None)):
+    """One draft by id, scoped to its owner."""
+    owner = _work_owner(optional_user(authorization), session)
+    draft = workspace.get_draft(draft_id, owner)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return draft
+
+
+@app.delete("/work/{draft_id}")
+def work_delete(draft_id: str, session: Optional[str] = None,
+                authorization: Optional[str] = Header(default=None)):
+    """Delete a draft the caller owns."""
+    owner = _work_owner(optional_user(authorization), session)
+    if not workspace.delete_draft(draft_id, owner):
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return {"deleted": draft_id}
+
+
+# ── AI assistant (④ 助手屏): line-by-line analysis + per-line follow-up ───────
+
+def _resolve_problem_text(problem: Optional[str], question_id: Optional[str]) -> str:
+    """The problem text the assistant grounds on: prefer what the frontend sent
+    (statement + latex), else reconstruct it from the bank by question_id."""
+    text = (problem or "").strip()
+    if text:
+        return text
+    if question_id:
+        q = exam.get_question(question_id)
+        if q:
+            parts = [str(q.get("statement") or "").strip(), str(q.get("latex") or "").strip()]
+            return "\n".join(p for p in parts if p)
+    return ""
+
+
+@app.post("/assistant/analyze")
+def assistant_analyze(req: AssistantAnalyzeRequest):
+    """Line-by-line analysis of the student's corrected work (校对屏 → 助手屏).
+    Returns ``{lines:[{idx,content,analysis,has_issue,manim}], summary, provider}``;
+    correct lines come back with an empty analysis (blank right column). Always 200 —
+    ``provider`` is ``template`` when Claude is unavailable so the screen still works."""
+    problem_text = _resolve_problem_text(req.problem, req.question_id)
+    return assistant.analyze(
+        problem_text, req.student_work_md,
+        session_id=req.session_id or "assistant",
+        model=req.model, render_mode=req.render_mode,
+    )
+
+
+@app.post("/assistant/ask")
+def assistant_ask(req: AssistantAskRequest):
+    """Per-line follow-up chat for the 助手屏. Grounds the reply in the clicked line
+    (``focus`` = {idx, content, analysis}) plus the problem. Always 200 with a
+    ``provider`` so the shared chat control can fall back gracefully."""
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Empty message")
+    problem_text = _resolve_problem_text(req.problem, req.question_id)
+    return assistant.ask(
+        message, problem=problem_text, focus=req.focus,
+        history=req.history, render_mode=req.render_mode,
+        allow_special=req.allow_special, model=req.model,
+        session_id=req.session_id or "assistant",
+    )
+
+
 #  ═══════════════════════════════════════════════════════════════════════
 #  AUTH — sign up / sign in / sign out / current user (SQLite-backed)
 #  ═══════════════════════════════════════════════════════════════════════
@@ -2273,7 +2442,8 @@ def claude_chat(request: ChatRequest):
         }
 
     try:
-        system = prompts.build_chat_system(request.expression or "", engine_result)
+        system = prompts.build_chat_system(request.expression or "", engine_result,
+                                           allow_special=request.allow_special)
         messages = prompts.to_messages(request.history or [], user_message)
         reply = claude_service.complete(
             system=system, messages=messages,
@@ -2578,6 +2748,48 @@ def animate_solution(request: MathRequest):
             detail={"message": "Policy violation", "violations": policy_result.violations},
         )
     return ManimAnimator.build(request.expression)
+
+
+@app.post("/manim/render")
+async def manim_render_endpoint(req: ManimRenderRequest):
+    """Real Manim render (v0.4.5b) with graceful degradation.
+
+    Renders a ``<manim>`` block to an actual MP4 when the server has Manim CE +
+    ffmpeg; otherwise (or on render failure) returns ``status != "ok"`` plus the
+    browser **storyboard** so the frontend animates in-page. Always 200 — the
+    ``<manim>`` affordance never errors out, per the acceptance rule "无 Manim 时自动
+    回落且不报错"."""
+    expr = (req.expression or "").strip()
+    if expr:
+        policy = PolicyEngine.evaluate(expr)
+        if not policy.allowed:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "Policy violation", "violations": policy.violations},
+            )
+
+    # Template storyboard + template Manim code (SymPy-driven) — the always-available
+    # fallback and the code we hand to the renderer when AI generation is off.
+    board = ManimAnimator.build(expr) if expr else {"storyboard": [], "manim_code": ""}
+
+    # Rendering shells out (subprocess) and can take many seconds; keep the event
+    # loop free by offloading to a worker thread.
+    result = await run_in_threadpool(
+        manim_render.render,
+        manim_code=req.manim_code,
+        spec=(req.spec or ""),
+        expression=expr,
+        template_code=board.get("manim_code"),
+        session_id=req.session_id or "manim",
+        model=req.model,
+    )
+
+    # Attach the storyboard + expression so the UI can degrade to in-page frames.
+    result.setdefault("storyboard", board.get("storyboard", []))
+    result.setdefault("expression", expr)
+    if not result.get("manim_code"):
+        result["manim_code"] = board.get("manim_code", "")
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════

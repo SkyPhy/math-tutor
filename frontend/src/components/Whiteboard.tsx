@@ -1,23 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
+import { Excalidraw } from '@excalidraw/excalidraw';
+import '@excalidraw/excalidraw/index.css';
 import { useStore } from '../store';
-import type { Tool } from '../types';
 
-// The native whiteboard. The <canvas> element is owned by the long-lived
-// BoardEngine (so strokes survive screen changes); this component just mounts it
-// into the DOM and renders the toolbar + engine selector + fullscreen control.
+// The whiteboard — now Excalidraw only (the native 800×600 canvas engine is
+// retired). Excalidraw is an infinite canvas with its own toolbar that fills its
+// container, so ⛶ fullscreen genuinely covers the screen. We hand its imperative
+// API to the board facade (store) so 提交/AI 助手 can rasterise the scene for OCR.
 export function Whiteboard() {
-  const { board, boardMode, setBoardMode } = useStore();
-  const hostRef = useRef<HTMLDivElement>(null);
+  const { board } = useStore();
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [tool, setToolState] = useState<Tool>(board.tool);
-  const [eraser, setEraser] = useState(board.eraserRadius);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (host) board.mount(host);
-    return () => board.detach();
-  }, [board]);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
@@ -25,16 +18,14 @@ export function Whiteboard() {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
-  const pick = (t: Tool) => {
-    board.setTool(t);
-    setToolState(t);
-  };
+  // Release the API reference if this board ever unmounts.
+  useEffect(() => () => board.setApi(null), [board]);
 
   const toggleFullscreen = () => {
     const wrap = wrapRef.current;
     if (!wrap) return;
     if (!document.fullscreenElement) {
-      wrap.requestFullscreen?.().catch(() => alert('Fullscreen is not available in this browser/context.'));
+      wrap.requestFullscreen?.().catch(() => alert('全屏在当前浏览器 / 环境不可用。'));
     } else {
       document.exitFullscreen?.();
     }
@@ -44,75 +35,23 @@ export function Whiteboard() {
     <div className="container">
       <div id="canvas-wrapper" ref={wrapRef}>
         <div className="board-mode-row" id="board-mode-row">
-          <label className="board-mode-label" htmlFor="boardModeSelect">
-            Whiteboard engine
-          </label>
-          <select
-            id="boardModeSelect"
-            className="board-mode-select"
-            value={boardMode}
-            onChange={(e) => setBoardMode(e.target.value === 'excalidraw' ? 'excalidraw' : 'original')}
-          >
-            <option value="original">✏️ Original Whiteboard</option>
-            <option value="excalidraw" disabled>
-              🎨 Excalidraw（即将回归）
-            </option>
-          </select>
+          <span className="board-mode-label">白板 · Excalidraw</span>
           <button
             id="fullscreen-btn"
             className="board-fullscreen-btn"
             onClick={toggleFullscreen}
-            title="Toggle fullscreen whiteboard"
+            title="切换全屏白板"
           >
-            {isFullscreen ? '🗗 Exit Fullscreen' : '⛶ Fullscreen'}
+            {isFullscreen ? '🗗 退出全屏' : '⛶ 全屏'}
           </button>
         </div>
 
-        <div id="canvas-container" ref={hostRef} />
-
-        <div className="board-tools">
-          <span id="native-tools" style={{ display: 'contents' }}>
-            <button className={`tool-btn ${tool === 'pen' ? 'active' : ''}`} onClick={() => pick('pen')}>
-              ✏️ Pen
-            </button>
-            <button
-              className={`tool-btn ${tool === 'erasePixels' ? 'active' : ''}`}
-              onClick={() => pick('erasePixels')}
-              title="Erase a circular area around the cursor"
-            >
-              🧽 Erase Area
-            </button>
-            <button
-              className={`tool-btn ${tool === 'eraseStrokes' ? 'active' : ''}`}
-              onClick={() => pick('eraseStrokes')}
-              title="Erase whole strokes the cursor touches"
-            >
-              ✂️ Erase Stroke
-            </button>
-            <label className="eraser-size">
-              Size
-              <input
-                type="range"
-                min={5}
-                max={60}
-                value={eraser}
-                onInput={(e) => {
-                  const v = parseInt((e.target as HTMLInputElement).value, 10);
-                  board.setEraserRadius(v);
-                  setEraser(v);
-                }}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  board.setEraserRadius(v);
-                  setEraser(v);
-                }}
-              />
-              <span>{eraser}</span>
-            </label>
-            <button className="btn-secondary" onClick={() => board.clear()}>
-              Clear Board
-            </button>
-          </span>
+        <div id="excalidraw-host" className="excalidraw-host">
+          <Excalidraw
+            excalidrawAPI={(api) => board.setApi(api)}
+            langCode="zh-CN"
+            initialData={{ appState: { viewBackgroundColor: '#ffffff' } }}
+          />
         </div>
       </div>
     </div>

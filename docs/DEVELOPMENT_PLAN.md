@@ -602,9 +602,12 @@ Math Solver"）。本计划做三件事：
 - **v0.3.1a · 选区屏**（→ 已作为 **v0.4.1a** 在 React 落地）：native `strokes[]` 套索/框选 + 句柄缩放 + 只导出选中区；OCR 模型下拉（`/recognize/models`）。**验收**：只发送选中笔画的 PNG，`/recognize` 正常返回。
   - **已实现（v0.4.1a）**：`frontend/src/board/selection.ts`（`exportRect`/`exportLasso` 直接从白板 canvas 拷像素，忽略擦除 op）+ `SelectScreen`（矩形 8 句柄缩放/平移 + 套索；进屏默认=墨迹包围盒）+ 后端 `GET /recognize/models`（`recognize.list_models()`）。验收达成：真后端只裁选中区 OCR 返回 `2+3=5`/status ok；headless Chrome 对 `selection.ts` 11 断言全过（含空白区导出 0 墨迹）。
 - **v0.3.2a · 校对屏 + 个人草稿库**：三渲染方式（marked.js+MathJax）+ 纠错工具 + `workspace.py`/`/work/*`。**验收**：识别→改字→存草稿→重开续作；`final` 提交后 submit 路径进 `/verify` 判分。
-- **v0.3.3a · AI 助手屏（逐行分析）**：`assistant.py` + `/assistant/analyze` + 两列对齐 + 行级追问 `/assistant/ask`；公共聊天控件（渲染/换行键/特殊符号）。**验收**：学生作答逐行对齐分析，无误行留空；点行可带上下文追问。
-- **v0.3.4a · 答疑屏**：题目屏「提问/不会做」→ 答疑屏；`/analyze` 解析 + `/claude/chat` 问答 + 公共控件。**验收**：不经白板即可就本题问答，苏式不直接给答案。
-- **v0.3.5b · 真 Manim（可选、独立）**：`/manim/render` + `manim_render.py`，`<manim>` 块真渲染，环境不全降级故事板。**验收**：助手屏某行触发的 `<manim>` 能出真动画；无 Manim 时自动回落且不报错。
+- **v0.3.3a · AI 助手屏（逐行分析）**（→ 已作为 **v0.4.3a** 在 React 落地）：`assistant.py` + `/assistant/analyze` + 两列对齐 + 行级追问 `/assistant/ask`；公共聊天控件（渲染/换行键/特殊符号）。**验收**：学生作答逐行对齐分析，无误行留空；点行可带上下文追问。
+  - **已实现（v0.4.3a）**：`backend/app/assistant.py`（纯编排，沿用 workspace.py 分层——路由留 `main.py`）：`split_lines` 切非空行 → `analyze` 调 `claude_service` 逐行产出对齐分析（JSON 对象 `{summary,lines:[{idx,has_issue,analysis}]}`），**按 idx 对齐回本地行**（漏行/多行不错位，正确行自然留空），`<manim>` 注记抽到 `manim` 字段；网关不可用→模板降级。`prompts.build_line_analysis_prompt`（留空规则 + `<manim>` 约定 + `render_mode` 提示）/`build_assistant_chat_system`（`focus` 行上下文 + `allow_special`）。新端点 `POST /assistant/analyze`、`POST /assistant/ask`（`_resolve_problem_text`：题面缺省时按 `question_id` 从 `exam.get_question` 还原）。前端公共聊天控件 `ChatBox`（渲染 md+latex / Enter 发送·Shift+Enter 换行 / 20 个特殊符号插入，导出 `SPECIAL_SYMBOLS`），`AssistantScreen` 两列对齐网格 + 整行可点 + **每行独立追问线程** +「重新分析」，`store` 新增 `renderMode` 交接。验收达成：真后端 + 真网关对 `2x+4=10→2x=10+4→…` 的作答，正确行留空、错误行判出"移项未变号"并附故事板，行级追问返回苏格拉底式引导；空作答/空消息/仅 `question_id` 三条边界路径均正确。
+- **v0.3.4a · 答疑屏**（→ 已作为 **v0.4.4a** 在 React 落地）：题目屏「提问/不会做」→ 答疑屏；`/analyze` 解析 + `/claude/chat` 问答 + 公共控件。**验收**：不经白板即可就本题问答，苏式不直接给答案。
+  - **已实现（v0.4.4a）**：`AskScreen` 真实现（题目卡 `ProblemBody` 就地渲染题面 + 免责声明；「🔍 解析此题」→ `POST /analyze` 苏式 0 级解析作首条 AI 消息；`ChatBox` 自由问答 → `POST /claude/chat` 带 `expression` grounding + 会话历史；换题开新对话）。api 层加 `analyzeProblem`（typed `AnalyzeResp`）+ `analyzeText`（合并 socratic 文本，回退 `steps`）。后端零改动（复用既有端点）。验收达成：真网关 `/analyze` 就「求 2x+4=10 中 x」返回苏式解析（337 字，未直接给答案），`/claude/chat` 引导式回复，公共 `ChatBox` 复用无回归。
+- **v0.3.5b · 真 Manim（可选、独立）**（→ 已作为 **v0.4.5b** 在 React 落地）：`/manim/render` + `manim_render.py`，`<manim>` 块真渲染，环境不全降级故事板。**验收**：助手屏某行触发的 `<manim>` 能出真动画；无 Manim 时自动回落且不报错。
+  - **已实现（v0.4.5b）**：`backend/app/manim_render.py`（纯编排 + subprocess，沿用 assistant.py 分层）：`available()` 需 `manim`+`ffmpeg` 都在 PATH；`generate_code` 调 `claude_service`+`prompts.build_manim_prompt` 生成自包含 Scene；`render()` 代码源 显式→AI→模板，装了 Manim 则 `subprocess manim -ql`（timeout 150s）→ glob mp4 拷进 `data/manim_media/`，否则 `status:unavailable|error` + 原因**从不抛异常**。新端点 `POST /manim/render`（先出 `ManimAnimator` 模板故事板兜底，`run_in_threadpool` 委托渲染）+ `app.mount("/manim-media", StaticFiles)`。前端 `ManimView`（「▶ 生成动画」→ 真 `<video>` 或 `Storyboard` 逐帧播放器 + 展开 Manim 代码），接入 `AssistantScreen` 带 `<manim>` 的行。验收达成：无 Manim 环境 `/manim/render` 返回 `status:"unavailable"` + AI 生成的 Manim 代码 + 6 帧模板故事板 + 中文降级原因，**HTTP 200 不报错**；静态挂载缺失文件 404；真渲染路径代码就绪待有 Manim 的环境端到端确认。
 
 > 验收一律遵循仓库习惯：**运行应用 + 观测真实行为**（headless 浏览器 / `curl`），而非只跑单测。
 > 真链路涉及网关的步骤注意 §5 的并发/缓存/超时约束（多路推理与逐行分析都会放大网关抖动）。
@@ -749,3 +752,12 @@ Math Solver"）。本计划做三件事：
 
 > 本计划为增量演进蓝图；任何阶段落地前应再次以"运行—观测"方式校核当时的真实代码状态，
 > 因为代码是唯一事实来源，本文档是对它的规划性陈述。
+
+|-------------------------------<选择换行:drop-down list:1.enter 2.alt+enter 3.ctrl+enter 若选择enter只能点击sent发送><允许识别特殊符号与表达式（包括正则，\n\r换行，转义，放在一个可以多项选择的表单里）><sent>|这个功能没实现
+
+Manim CE / ffmpeg未安装
+
+就这一步的问题问 AI，例如「为什么这里要变号？」
+
+聊天框工具组件完全未按照我的要求完成
+要求：|md区域（可用鼠标滚轮左右滚动）：<加粗(若选中文本已经加粗，则取消加粗)><标题（下拉菜单选择标题等级）><新建表格><列举><引用>|latex区域（可用鼠标滚轮左右滚动）：<插入公式(这个按键之后的所有按键，在检测到后续自己插入的文本不在$$$$中时，自动在两侧插入$$)><分式><右上角标><右下角表><平方根><n次方根><对数><自然对数><方程组><drop-down list:特殊符号等等>|不是这样重做！

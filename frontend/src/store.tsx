@@ -1,11 +1,11 @@
 // App-wide store: the screen router (with back-stack), the persistent whiteboard
 // engine, and the current problem. Kept deliberately small — a React context over
 // useState/useRef rather than a heavyweight state library.
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { BoardEngine } from './board/BoardEngine';
+import { ExcalidrawBoard } from './board/ExcalidrawBoard';
 import { SCREEN_DEFS } from './config';
-import type { BoardMode, Problem, ScreenName, WorkFlow } from './types';
+import type { Problem, RenderMode, ScreenName, WorkFlow } from './types';
 
 interface StoreValue {
   // ── routing ──
@@ -16,10 +16,8 @@ interface StoreValue {
   navHome: () => void;
   startWorkFlow: (flow: Exclude<WorkFlow, null>) => void;
 
-  // ── whiteboard ──
-  board: BoardEngine;
-  boardMode: BoardMode;
-  setBoardMode: (m: BoardMode) => void;
+  // ── whiteboard (Excalidraw) ──
+  board: ExcalidrawBoard;
   captureBlob: () => Promise<Blob | null>;
 
   // ── problem ──
@@ -29,6 +27,13 @@ interface StoreValue {
   // ── OCR handoff (select → check) ──
   ocrText: string;
   setOcrText: (t: string) => void;
+
+  // ── corrected work handoff (check → assistant / verify) ──
+  studentWork: string;
+  setStudentWork: (t: string) => void;
+  // render mode the work was saved with (check → assistant reading hint)
+  renderMode: RenderMode;
+  setRenderMode: (m: RenderMode) => void;
 
   sessionId: string;
 }
@@ -47,16 +52,14 @@ function makeSessionId(): string {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [screen, setScreen] = useState<ScreenName>('problem');
   const [workFlow, setWorkFlow] = useState<WorkFlow>(null);
-  const [boardMode, setBoardMode] = useState<BoardMode>('original');
   const [problem, setProblem] = useState<Problem | null>(null);
   const [ocrText, setOcrText] = useState('');
+  const [studentWork, setStudentWork] = useState('');
+  const [renderMode, setRenderMode] = useState<RenderMode>('3');
 
   const navStack = useRef<ScreenName[]>([]);
-  const [board] = useState(() => new BoardEngine());
+  const [board] = useState(() => new ExcalidrawBoard());
   const sessionId = useMemo(makeSessionId, []);
-
-  // The engine lives for the app's lifetime; tear it down only on full unmount.
-  useEffect(() => () => board.destroy(), [board]);
 
   const showScreen = (name: ScreenName) => {
     if (!SCREEN_DEFS[name]) return;
@@ -83,7 +86,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     showScreen('problem');
   };
 
-  const startWorkFlow = (flow: Exclude<WorkFlow, null>) => {
+  // 提交 / AI 助手 both go through 选区 → 校对. Rasterise the Excalidraw scene first
+  // (the 选区屏 crops a region out of that snapshot for OCR); refuse on a blank board.
+  const startWorkFlow = async (flow: Exclude<WorkFlow, null>) => {
+    const drawn = await board.snapshot();
+    if (!drawn) {
+      window.alert('请先在白板上作答，再提交。');
+      return;
+    }
     setWorkFlow(flow);
     navTo('select');
   };
@@ -98,13 +108,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     navHome,
     startWorkFlow,
     board,
-    boardMode,
-    setBoardMode,
     captureBlob,
     problem,
     setProblem,
     ocrText,
     setOcrText,
+    studentWork,
+    setStudentWork,
+    renderMode,
+    setRenderMode,
     sessionId,
   };
 

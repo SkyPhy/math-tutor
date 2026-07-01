@@ -3,3 +3,11 @@ uvicorn
 sympy
 python-multipart
 pillow
+
+# Manim CE video rendering (POST /manim/render). Optional at runtime — the app
+# degrades to the browser storyboard when absent (manim_render.available()==False)
+# — but start.bat installs them into backend\.venv so real MP4s work out of the box.
+# imageio-ffmpeg bundles an ffmpeg binary; start.bat copies it to .venv\Scripts\ffmpeg.exe.
+# NOTE: MathTex/Tex mobjects additionally require a LaTeX distribution (not installed here).
+manim==0.20.1
+imageio-ffmpeg==0.6.0

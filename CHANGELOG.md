@@ -11,6 +11,178 @@
 
 ---
 
+## v0.4.7a — 公共聊天控件补全（用户反馈）：恢复「渲染方式」下拉 + 「换行键」下拉 + 「允许识别」多选表单
+
+补齐 `docs/DEVELOPMENT_PLAN.md` §C-公共 里聊天输入控件规定、但此前未落地的三件套（`ChatBox` 底部一排：
+渲染方式 · 换行键 · 允许识别 · 发送）。**判分/共识/诊断内核零改动；助手/答疑屏仅改 `onSend` 签名。**
+
+- **① 恢复「渲染方式」下拉（md+latex 渲染 / 源码风 / 纯文本）**（`ChatBox` + `lib/markdown`）：此前聊天消息**恒按
+  全渲染**，用户反馈"选 latex+md 渲染还是仅文本的下拉不见了"。现 `ChatBox` 自带 `RenderMode`（`1` 全渲染 /
+  `2` 源码风 / `3` 纯文本，聊天默认 `1`）——`3` 纯文本经新 `renderPlain` 包 `<pre class="chat-plain">`（MathJax
+  `skipHtmlTags` 含 `pre`/`code`，故 `\(…\)` 原样显示不被排版），`2` 复用 `renderSource`。切换即重排（typeset key
+  改成 `渲染模式:消息数`）。
+- **② 「换行键」下拉：Enter / Alt+Enter / Ctrl+Enter**（`ChatBox`）：下拉选**哪个组合键换行**；选 **Enter 换行**则
+  Enter 只换行、**发送只能点「发送」**；选 Alt/Ctrl+Enter 则该组合换行、裸 Enter 发送（默认 Ctrl+Enter，保留
+  Enter 发送习惯）。裸 Alt/Ctrl+Enter 浏览器默认不插换行，故在光标处手动插入；IME 组合中的 Enter 一律放行。
+- **③ 「允许识别特殊符号与表达式」多选表单**（`ChatBox`；透传后端 `allow_special`）：`<details>` 弹层多选——
+  特殊符号（默认勾）/ 正则表达式 / `\n \r` 换行 / 转义（`\t` 等）。**前端行为**：勾"换行"则把字面 `\n``\r\n``\r`
+  转真换行；勾"转义"则 `\t` 转制表符——**刻意收窄，绝不动 LaTeX 反斜杠**（`\frac`/`\times` 原样保留，已单测）。
+  勾选项汇成 `allow_special` 数组透传后端：`/assistant/ask` 早有该字段（改为取控件选项，去掉写死的 `SPECIAL_SYMBOLS`）；
+  `/claude/chat` **新增** `allow_special`（`ChatRequest` + `prompts.build_chat_system` 各加一行提示，让模型知道这些
+  符号/表达式是**有意为之、按字面理解**，非笔误）。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功；`applySpecial`/`buildAllowSpecial` Node 单测 9/9
+  过（含"LaTeX 反斜杠在换行+转义均开时仍存活"的关键用例）；`build_chat_system` 注入/不注入 `allow_special` 两路
+  Python 冒烟过；**headless Chrome 两张截图**确认底部三控件 + 「允许识别」多选弹层按规格渲染，AI 消息 md+latex 正常。
+
+## v0.4.6a — 五屏细化（用户反馈 4 项）：答疑随用户语言 + OCR 全文保留换行 + 校对屏工具条扩充 + 聊天内 `<manim>` 渲染
+
+按用户反馈精修四处，横跨③校对④助手⑤答疑与 OCR/聊天底座。**判分/共识/诊断内核零改动。**
+
+- **#1 · 答疑随使用者语言**（`prompts.py`）：`build_chat_system`/`build_assistant_chat_system` 加"**用学生
+  提问所用的语言回答**（中文↔英文，逐轮跟随）"。真网关验证：英文提问→英文回复（ascii 占比 0.92）。
+- **#2 · OCR 全文识别 + 保留换行**（`recognize.py`）：`_OCR_PROMPT` 从"只转录单个数学式"改为"**转录图中
+  一切**——数学、符号、以及任何英文/中文文字，**按原样保留换行**，勿在数字/单词字符间插空格"。
+  `_clean_math_text`→`_clean_transcription`：**不再折叠所有空白**（旧逻辑会删掉换行与词间空格，破坏散文），
+  改为仅规整行尾/连续多空格、**保留换行**。识别文本送服务器时换行完整（学生在校对屏纠错）。
+- **#3 · md/latex 工具组件（校对屏 editor + AI 交流屏共用）**（新 `components/EditorToolbar.tsx` +
+  `lib/editorOps.ts`；接入 `CheckScreen` 与 `ChatBox`）：**一套共享工具组件**拆成**两区、可鼠标滚轮左右
+  滚动**——**MD 区**：加粗（已加粗则**取消**）/ 标题（下拉选 H1–H6，替换已有 #）/ 新建表格 / 列举 / 引用；
+  **LaTeX 区**：插入公式（`$$$$`）/ 分式 / 右上角标 / 右下角标 / 平方根 / n 次方根 / 对数 / 自然对数 /
+  方程组 / 特殊符号（下拉 25 个）。**「插入公式」之后**的 LaTeX 按钮**自动判断插入点是否已在 `$$…$$` 内，
+  不在则自动两侧补 `$$`**（`insertLatex`/`isInsideMath` 纯函数）。滚轮横滚用非被动 `wheel` 监听、仅在溢出时
+  `preventDefault`。**关键修正（用户反馈）**：此前工具组件只在 CheckScreen、且被渲染模式 1/2 门控（默认纯文本
+  模式 3 下**看不到**），而 ChatBox 只有一排纯符号——现改为 `EditorToolbar` **同时进 CheckScreen（始终显示，
+  不再受渲染模式门控）与 ChatBox（取代旧符号排）**，两处工具完全一致。`editorOps.ts` 纯函数经 Node+esbuild
+  单测（auto-`$$`、加粗 toggle、标题替换）；headless Chrome 截图确认两屏工具组件一致渲染。
+- **#4 · 聊天回答用 `<manim>` 出形象化演示**（`prompts.py` + `ChatBox`/`ManimView`）：A) 提示词让 AI"**用图/
+  动画更好懂时，先想清楚演示什么，再附一个 `<manim>…</manim>` 说明**"（真网关验证：请求可视化→回复确含
+  `<manim>` 故事板）。B) `ChatBox` 渲染消息时**切分出 `<manim>…</manim>` 段**，各渲染成 `ManimView`（其余走
+  md+latex）；`ManimView` 新增 `code` 入参（块内是 Manim 代码则整段送 `manim_code`，是描述则送 `spec`），
+  经 `/manim/render` 出真视频或降级故事板。助手/答疑屏把题面作 `manimExpression` 传入 ChatBox。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功；`editorOps` Node 单测全过；`recognize`
+  `_clean_transcription` 单测（换行 + 中英散文保留）过；**真网关**：`/claude/chat` 英文问→英文答、可视化
+  请求→含 `<manim>` 段；后端 `recognize`/`prompts` 导入无回归。
+
+## v0.4.5b — 真 Manim 渲染（React）：`<manim>` 块出真视频（`manim_render.py` / `/manim/render`），无 Manim 自动回落故事板
+
+落地五屏流程的可选独立能力（`docs/DEVELOPMENT_PLAN.md` §E5 / 北极星目标 10，原计划 v0.3.5b）。助手屏
+逐行分析产出的 `<manim>` 故事板注记，现可**按需渲染成真视频**：服务器装了 Manim CE + ffmpeg 时出
+真 MP4，否则**自动回落**到浏览器故事板（逐帧 MathJax 演示）+ 附上生成的 Manim 代码——**始终 200、
+不报错**（沿用 `claude_service`/`recognize` 的降级范式）。判分/共识/诊断内核零改动。
+
+- **后端 `backend/app/manim_render.py`（新）**：纯编排 + subprocess（无 FastAPI，沿用 assistant.py/
+  workspace.py 分层）。`available()` 仅当 `manim` 与 `ffmpeg` **都在 PATH** 时为真；`generate_code`
+  调 `claude_service` + `prompts.build_manim_prompt` 生成自包含 Manim CE Scene（剥离代码围栏）；
+  `render()` 代码来源优先级 **显式 manim_code → AI 生成 → 模板代码**，装了 Manim 则写临时 `.py` →
+  `subprocess.run(["manim","-ql",…], timeout=150)` → glob 出 mp4 拷进 `data/manim_media/` 返回
+  `video_url`；未装/失败/超时→`status: unavailable|error` + 原因，**从不抛异常**（都变状态字段）。
+- **`prompts.build_manim_prompt`（新）**：让模型只输出可运行的 Manim CE 代码（单 Scene、标准 mobject、
+  ≤40 行 / ≤15s，快而稳），围绕 `<manim>` 注记要讲清的点。
+- **新端点 + 静态挂载**（`main.py`）：`POST /manim/render`（`{expression|spec|manim_code}` → `{status,
+  video_url?, storyboard, manim_code, provider, reason?}`；先 `ManimAnimator.build` 出 SymPy 驱动的
+  **模板故事板**作兜底，再 `run_in_threadpool` 委托 `manim_render.render`——重渲染不堵事件循环）；
+  `app.mount("/manim-media", StaticFiles(...))` 供真视频回放。含题面策略校验。
+- **前端 `ManimView`（`frontend/src/components/ManimView.tsx`，新）**：`<manim>` 块的「▶ 生成动画」
+  按钮 → `/manim/render`。`status==='ok'` 播 `<video>`（`API_BASE + video_url`，自动循环）；否则**故事板
+  播放器 `Storyboard`**（逐帧 MathJax + 标题 + 说明，自动步进 + 上/下一步 + 重播）+ `<details>` 展开
+  生成的 Manim 代码 + 诚实说明为何无真视频。接入 `AssistantScreen`：点开带 `<manim>` 的行时，追问区
+  上方出现该动画块（expression=题面、spec=该行注记）。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功。**真后端 HTTP**：`/manim/render`
+  在**无 Manim 环境**返回 `status:"unavailable"`、`provider:"claude"`（AI 已生成 Manim 代码）、
+  6 帧模板故事板、完整 `manim_code`、中文降级原因——**HTTP 200、不报错**（满足"无 Manim 时自动回落
+  且不报错"）；`/manim-media/<缺失>` 返回 404（挂载已注册，非路由错误）；`manim_render` 离线单测：
+  `available()` 检测、场景名提取、代码围栏剥离均正确。真渲染路径（装 Manim 时出 MP4）代码就绪，
+  待有 Manim CE 的环境端到端确认。
+
+## v0.4.4a — 答疑屏（React）：不经白板就本题问答（`解析此题` /analyze + Q&A /claude/chat + 公共聊天控件）
+
+落地五屏流程的第 5 屏（`docs/DEVELOPMENT_PLAN.md` §C5，原计划 v0.3.4a）。题目屏点「🙋 提问 / 不会做」
+直达答疑屏，**不经白板**即可就当前题目问答；苏格拉底式**不直接给最终答案**。复用 v0.4.3a 建的公共
+聊天控件 `ChatBox`。后端零改动——直接复用既有 `/analyze` 与 `/claude/chat`。
+
+- **答疑屏 `AskScreen`（v0.4.4a 真实现，取代占位）**：顶部题目卡（`ProblemBody` 就地渲染题面数学 +
+  AI 免责声明）；「🔍 解析此题」→ `POST /analyze`（苏式 0 级解析，`analyzeText` 抽取 socratic 消息文本）
+  作为对话首条 AI 消息；下方 `ChatBox` 自由问答 → `POST /claude/chat`（带 `expression` grounding +
+  会话历史），每条回复流式追加。换题即开新对话。
+- **api 层**：`analyzeProblem`（typed `AnalyzeResp`）+ `analyzeText`（合并 socratic tutor/system 文本，
+  回退 legacy `steps`）。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功。**真后端 HTTP**（真网关
+  `claude-opus-4-8`）：`/analyze` 就「求 2x+4=10 中 x」返回 1 条 tutor 苏式解析（337 字，未直接给答案）；
+  `/claude/chat`「第一步该怎么想？」返回引导式回复；公共 `ChatBox`（渲染 md+latex / Enter 发送·
+  Shift+Enter 换行 / 特殊符号）复用无回归。
+
+## v0.4.3a — AI 助手屏（React）：逐行对齐分析（`assistant.py` / `/assistant/analyze`）+ 行级追问 + 公共聊天控件
+
+落地五屏流程的第 4 屏（`docs/DEVELOPMENT_PLAN.md` §C4 / §E2，原计划 v0.3.3a）。学生经③校对屏
+「提交（求助）」后，作答被**逐行对齐分析**：左列学生的每一步、右列 AI 的点评——**无误的行留空**
+（右列不写字），只有出错/可改进的行才给分析。点**任意行**可就那一步**带上下文追问**。判分/共识/
+诊断内核零改动，仅在其上新增编排层 + UI 层。
+
+- **后端 `backend/app/assistant.py`（新）**：逐行分析编排（纯逻辑，无 DB / 无路由——沿用 v0.4.2a
+  `workspace.py` 的分层：新逻辑独立成模块，`@app` 路由留在 `main.py`）。`split_lines` 把作答切成非空
+  行（1 起编号），`analyze` 调 `claude_service` 让模型对**每行**产出对齐分析（JSON 对象 `{summary,
+  lines:[{idx,has_issue,analysis}]}`），再**按 idx 对齐回本地行**（模型漏行/多行都不会错位——正确行
+  自然留空）；`<manim>…</manim>` 故事板注记从 analysis 抽出到 `manim` 字段（真渲染留待 v0.4.5b）。
+  含 LaTeX 反斜杠修复的宽松 JSON 解析（复用 `main.py` 范式）。网关不可用/解析失败→**模板降级**
+  （按行列出但不点评，`provider:"template"`，附 `reason`）。`ask` 复用 `/claude/chat` 那套，把
+  **点开的那一行**（`focus={idx,content,analysis}`）+ 题目作为额外 grounding，苏格拉底式作答。
+- **`prompts.py` 扩展**：`build_line_analysis_prompt`（逐行、对齐、**留空规则**"不为正确行凑评语"、
+  `<manim>` 触发约定、按 `render_mode` 提示如何理解学生书写）、`build_assistant_chat_system`（含
+  `focus` 行上下文、`render_mode` 与 `allow_special` 特殊符号约束）。
+- **新端点**（`main.py`）：`POST /assistant/analyze`（`{question_id|problem, student_work_md,
+  session_id, model, render_mode}` → `{lines,summary,provider}`）、`POST /assistant/ask`（`/claude/chat`
+  字段 + `{focus, render_mode, allow_special}` → `{reply,provider}`）；`_resolve_problem_text` 优先用
+  前端传来的题面，缺省时按 `question_id` 从 `exam.get_question` 还原。两端点恒 200（`provider` 标明
+  是否降级），空消息 400。
+- **公共聊天控件 `ChatBox`（`frontend/src/components/ChatBox.tsx`，新）**：可复用聊天控件——**渲染**
+  （每条消息走 `renderMarkdownMath` + MathJax）、**换行键**（Enter 发送 / Shift+Enter 换行，兼容
+  中文输入法 composition）、**特殊符号**（`× ÷ ± √ π ≤ ≥ ≠ ∑ ∫ …` 20 个，按光标插入；同一份清单
+  作为 `allow_special` 传给后端）。导出 `SPECIAL_SYMBOLS`；助手屏用它做行级追问，⑤答疑屏（v0.4.4a）
+  可复用。
+- **助手屏 `AssistantScreen`（v0.4.3a 真实现，取代占位）**：进屏（`workFlow==='assist'` 提交后）用
+  `store.studentWork` + `renderMode` 调 `/assistant/analyze`；**两列对齐网格**——左列逐行渲染学生书写
+  （md+latex），右列出错行显示分析、无误行显示「✓ 这步没问题」、有 `manim` 显示 🎬 故事板注记。整行
+  可点，点开→底部 `ChatBox` 就**该行**追问（`/assistant/ask`），**每行各自保留一条对话线程**；顶部
+  summary 条 + provider 徽标 +「🔄 重新分析」。`store.tsx` 新增 `renderMode` 交接（校对屏提交时带上）。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功。**真后端 HTTP**（uvicorn + 真网关
+  `claude-opus-4-8`）：对 `2x+4=10 → 2x=10+4 → 2x=14 → x=7` 的作答，**第 1 行（正确）右列留空**、
+  第 2 行判出"移项未变号（应 \(2x=10-4\)）"并附 `<manim>` 故事板、第 3/4 行标出连锁错误，summary
+  给整体点评；行级 `/assistant/ask`「为什么移项要变号？」返回**苏格拉底式**引导（反问而非直接给答案）；
+  空消息→400；空作答→`provider:"empty"` 优雅返回；仅传 `question_id`（无题面）时后端从题库还原题面
+  正常分析。模板降级路径经离线单测（网关关时按行列出、`provider:"template"`）。
+
+## v0.4.2a — 校对屏（React）：OCR 文本回显纠错 + 三渲染方式 + 个人草稿库（workspace.py / `/work/*`）
+
+落地五屏流程的第 3 屏（`docs/DEVELOPMENT_PLAN.md` §C3 / §E1）。OCR 识别**必经校对**——学生先核对纠错
+再入库/送批改，避免识别噪声污染判分。新增**个人草稿库**：作答可命名暂存（按题号），断点续作。
+**判分/共识/诊断内核零改动**，仅在其上新增 UI 层 + 一个新 SQLite 子系统。
+
+- **后端 `backend/app/workspace.py`（新）**：个人草稿/答案库（`data/workspace.db`，纯标准库 sqlite3，
+  复用 `exam.py`/`auth.py` 范式）。表 `work_drafts(id, owner, question_id, filename, content_md,
+  render_mode, status, created_at, updated_at)`；`owner` = 登录用户名（`user:<name>`）或匿名
+  `session_id`（`sess:<id>`）。`save_draft`（带 `draft_id` 则**原地更新**——「存草稿→续作→再存」复用
+  一行不堆重复）、`list_drafts`（按 owner+题号、最新在前）、`get_draft`（带 owner 校验）、`delete_draft`。
+- **新端点**（`main.py`）：`POST /work/save`（`status=tmp` 存草稿 / `status=final` 提交，返回整条草稿
+  以便前端保留 id 续作）、`GET /work?session=&question_id=`（我的草稿列表）、`GET /work/{id}`、
+  `DELETE /work/{id}`——均按 `_work_owner` 归属隔离（他人 session 取不到 → 404）。
+- **校对屏 `CheckScreen`（v0.4.2a 真实现，取代占位）**：可编辑 `textarea` 回显并**逐字纠错** OCR 文本；
+  「渲染方式」下拉 **1 全渲染（md+latex）/ 2 源码风 / 3 纯文本（默认）**——1/2 时挂出 md&latex 工具条
+  （公式块/行内/分式/根号/上下标/Σ/加粗，按光标位置插入）+ 实时预览。底部：文件名输入 +「存草稿」
+  （`POST /work/save status=tmp`）/「提交」（`status=final`）；提交后按流程去向——`submit` 流→
+  `POST /verify` 共识判分并显示**判定面板**（对/错/未判定 + `judged_by`/`votes_label`/参考答案/理由），
+  `assist` 流→ AI 助手屏；「我的草稿（本题）」列表可一键载入续作。纠错后的内容经
+  `store.studentWork` 传给后续屏。
+- **Markdown+LaTeX 渲染（`frontend/src/lib/markdown.ts`，新）**：用 `marked@16`（提升为直接依赖）渲染
+  Markdown + 现有 MathJax 渲染公式。关键修复：marked 会把 `\(`/`\[` 的反斜杠当转义吃掉——故**先用占位符
+  保护所有公式段**（`$$…$$`/`\[…\]`/`\(…\)`，单 `$…$` 归一为 `\(…\)`）→ marked 解析散文 → 还原公式段，
+  使 LaTeX 原样抵达 MathJax。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错 + `vite build` 成功。**真后端 HTTP**（uvicorn）：`/work/save`
+  存 tmp → 带 `draft_id` 更新同一行（续作，内容确被改写）→ `/work` 列表 1 条 → `/work/{id}` 取回 →
+  **他人 session 取不到（404，归属隔离）** → 改 `final` → `DELETE` 成功；含中文文件名 UTF-8 往返正确。
+  **真 marked**（Node + 真依赖）：行内 `\(…\)`/行间 `$$…$$` 经 marked 后**原样存活**、`**粗体**` 渲染、
+  单 `$…$`→`\(…\)`、`\n`→`<br>`。所有新增/改动前端模块经**实时 Vite dev server** 转译 200 且 marked
+  预打包可解析（组件可在浏览器加载，无转译/导入错误）。
+
 ## v0.4.1a — 选区屏（React）：白板笔画上叠加矩形/套索框选 + 句柄缩放 + 仅导出选中区 → OCR
 
 落地五屏流程的第 2 屏（`docs/DEVELOPMENT_PLAN.md` §C2）。学生作答前先**框选白板的哪一部分**发给

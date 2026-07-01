@@ -31,56 +31,45 @@ from typing import List
 from . import config
 
 
-# The instruction we give the vision model. Kept terse and strict so it returns
-# a bare expression, not prose, that SymPy can parse downstream.
+# The instruction we give the vision model. The student's whiteboard holds a full
+# worked solution — not just a bare formula — so we transcribe EVERYTHING (maths,
+# symbols, AND any English/Chinese words) and PRESERVE the line breaks, because the
+# 校对屏 shows this text for the student to correct and the layout carries meaning.
 _OCR_PROMPT = (
-    "You are an OCR engine for handwritten mathematics. Transcribe the single "
-    "math expression or equation written in this image. Output ONLY the "
-    "expression itself as plain text — no explanation, no surrounding words, no "
-    "LaTeX delimiters, no code fences, no $ signs. Use ^ for exponents and * for "
-    "multiplication. If the image contains no legible math, output nothing."
+    "You are an OCR transcriber for a student's handwritten work. Transcribe "
+    "EVERYTHING written in the image — mathematics, symbols, AND any natural-language "
+    "text, whether English or Chinese — exactly as written. "
+    "PRESERVE the line breaks: put each written line on its own line, in reading order. "
+    "In maths use ^ for exponents and * for multiplication. "
+    "Do NOT insert spaces between the digits of a number or the letters of a word. "
+    "Output ONLY the transcription as plain text — no explanation, no commentary, "
+    "no code fences, no $ delimiters. If the image is blank, output nothing."
 )
 
 
-def _clean_math_text(fragments: List[str]) -> str:
+def _clean_transcription(fragments: List[str]) -> str:
     """
-    Normalise raw OCR output into something SymPy-friendly.
+    Lightly normalise the raw OCR output while KEEPING the student's line breaks.
 
-    Vision models occasionally wrap the answer in $...$, backticks, or LaTeX,
-    and use unicode math glyphs; we strip/convert the math-safe ones.
+    Unlike the old bare-expression cleaner, we no longer collapse all whitespace —
+    the transcription now includes prose (English/Chinese) and multi-line working,
+    so newlines and word spaces must survive. We only: join content parts, strip
+    code fences the model may add, normalise line endings, and tidy each line
+    (collapse runs of ≥2 spaces, trim trailing spaces). The 校对屏 lets the student
+    fix anything the OCR got wrong.
     """
-    text = " ".join(f.strip() for f in fragments if f and f.strip())
+    text = "".join(f for f in fragments if f)
 
-    # Strip code fences / LaTeX delimiters the model adds despite the prompt.
+    # Strip code fences the model sometimes adds despite the prompt.
     text = text.replace("```", "")
-    text = text.replace("$", "")              # $$ x $$ / $ x $ → x
-    text = text.strip("`").strip()
-    text = re.sub(r"\\[\(\[\)\]]", "", text)  # \( \) \[ \] anywhere
-    text = re.sub(r"\\text\s*\{([^}]*)\}", r"\1", text)  # \text{...} → ...
+    # Normalise line endings so downstream sees plain "\n".
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    # LaTeX operator commands → ASCII (do before stripping backslashes).
-    latex_ops = {
-        "\\times": "*", "\\cdot": "*", "\\div": "/",
-        "\\left": "", "\\right": "", "\\,": " ", "\\;": " ",
-    }
-    for bad, good in latex_ops.items():
-        text = text.replace(bad, good)
-
-    # Common glyph confusions / unicode math symbols.
-    replacements = {
-        "×": "*", "·": "*", "÷": "/",
-        "−": "-", "—": "-", "–": "-",   # unicode dashes → ASCII hyphen
-        "^": "**",                       # caret power → python power
-        "“": "", "”": "", "’": "'",
-    }
-    for bad, good in replacements.items():
-        text = text.replace(bad, good)
-
-    # nex-n2-pro (esp. with thinking off) tends to space out EVERY character,
-    # e.g. "2 x + 3 y - 7 = 1 5". A single expression never needs spaces, and
-    # leaving "1 5" would misparse as two numbers — so remove ALL whitespace.
-    text = re.sub(r"\s+", "", text).strip()
-    return text
+    # Per line: collapse only runs of ≥2 spaces/tabs (keep single word spaces),
+    # trim trailing whitespace. Newlines are preserved verbatim.
+    lines = [re.sub(r"[ \t]{2,}", " ", ln).rstrip() for ln in text.split("\n")]
+    # Drop blank lines at the very top/bottom, keep internal ones.
+    return "\n".join(lines).strip("\n")
 
 
 def _preprocess(image_bytes: bytes) -> bytes:
@@ -271,7 +260,7 @@ def recognize_via_claude(image_bytes: bytes) -> dict:
     except Exception as e:
         print(f"[recognize] Claude vision unexpected error: {e}")
         return {"text": "", "status": "error"}
-    text = _clean_math_text([raw])
+    text = _clean_transcription([raw])
     return {"text": text, "status": "ok" if text else "empty"}
 
 
@@ -345,7 +334,7 @@ def recognize_detailed(image_bytes: bytes) -> dict:
         print(f"[recognize] unexpected error: {e}")
         return {"text": "", "status": "error"}
 
-    text = _clean_math_text([raw])
+    text = _clean_transcription([raw])
     return {"text": text, "status": "ok" if text else "empty"}
 
 
