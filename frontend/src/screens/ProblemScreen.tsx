@@ -8,7 +8,7 @@ import { useStore } from '../store';
 // ① Problem screen — the wired core. Source picker → /practice/next, tags toggle,
 // MathJax problem card, targeted-practice controls, native whiteboard, 3 actions.
 export function ProblemScreen({ active }: { active: boolean }) {
-  const { problem, setProblem, board, navTo, startWorkFlow } = useStore();
+  const { problem, setProblem, board, navTo, startWorkFlow, model } = useStore();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<string>('bank');
@@ -26,6 +26,7 @@ export function ProblemScreen({ active }: { active: boolean }) {
           focusLogic: opts.focusLogic ?? null,
           difficulty: opts.difficulty ?? null,
           source: opts.source ?? source,
+          model, // AI 出题所用模型（后端按管理员池夹取）
         });
         setProblem(p);
         setExcludeId(p.id);
@@ -37,7 +38,7 @@ export function ProblemScreen({ active }: { active: boolean }) {
         setLoading(false);
       }
     },
-    [board, excludeId, setProblem, source],
+    [board, excludeId, setProblem, source, model],
   );
 
   // Initial problem (default 来源 = bank). Runs once.

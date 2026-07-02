@@ -121,19 +121,21 @@ def _preprocess(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
-def _call_nex_ocr(png_bytes: bytes) -> str:
-    """POST the image to the nex-n2-pro chat-completions endpoint and return the
-    transcribed text. Raises on any transport/HTTP/parse failure."""
+def _call_openai_ocr(png_bytes: bytes, *, endpoint: str, api_key: str, model: str,
+                     max_tokens: int, timeout: float, engine: str,
+                     disable_thinking: bool = False) -> str:
+    """POST the image to ANY OpenAI-compatible chat-completions endpoint as an
+    image_url and return the transcribed text. Shared by every OpenAI-protocol OCR
+    engine (nex-n2-pro, DeepSeek vision, …). Raises on transport/HTTP/parse failure.
+
+    `disable_thinking` sends `chat_template_kwargs.enable_thinking=false` — needed
+    for reasoning models (nex-n2-pro) whose UNBOUNDED "thinking" otherwise blows the
+    timeout and returns empty content; harmless for non-reasoning vision models."""
     data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
     payload = {
-        "model": config.NEX_OCR_MODEL,
-        "max_tokens": config.NEX_OCR_MAX_TOKENS,
+        "model": model,
+        "max_tokens": max_tokens,
         "temperature": 0,
-        # nex-n2-pro is a reasoning model whose "thinking" is UNBOUNDED — on a
-        # busy expression it can reason for 40–120s+ and blow the timeout,
-        # returning empty content. OCR needs no chain-of-thought, so disable
-        # thinking: this cuts latency dramatically and makes content reliable.
-        "chat_template_kwargs": {"enable_thinking": False},
         "messages": [
             {
                 "role": "user",
@@ -144,15 +146,15 @@ def _call_nex_ocr(png_bytes: bytes) -> str:
             }
         ],
     }
+    if disable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     body = json.dumps(payload).encode("utf-8")
     headers = {
         "content-type": "application/json",
-        "authorization": f"Bearer {config.NEX_OCR_API_KEY}",
+        "authorization": f"Bearer {api_key}",
     }
-    req = urllib.request.Request(
-        config.ocr_endpoint(), data=body, headers=headers, method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=config.NEX_OCR_TIMEOUT) as resp:
+    req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8")
     obj = json.loads(raw)
 
@@ -170,13 +172,33 @@ def _call_nex_ocr(png_bytes: bytes) -> str:
         )
     content = content if isinstance(content, str) else ""
 
-    # nex-n2-pro is a reasoning model. If `content` is empty AND the model was
-    # cut off mid-thought (finish_reason == "length"), the token budget was too
-    # small — surface that clearly in the log so it's not a silent blank read.
+    # If `content` is empty AND the model was cut off mid-thought
+    # (finish_reason == "length"), the token budget was too small — surface it in
+    # the log so it isn't a silent blank read (especially for reasoning models).
     if not content.strip() and choice.get("finish_reason") == "length":
-        print("[recognize] nex-n2-pro ran out of tokens before answering "
-              "(finish_reason=length). Raise NEX_OCR_MAX_TOKENS in .env.")
+        print(f"[recognize] {engine} ran out of tokens before answering "
+              f"(finish_reason=length). Raise its MAX_TOKENS in .env.")
     return content
+
+
+def _call_nex_ocr(png_bytes: bytes) -> str:
+    """Transcribe via the nex-n2-pro vision endpoint (path 1)."""
+    return _call_openai_ocr(
+        png_bytes, endpoint=config.ocr_endpoint(), api_key=config.NEX_OCR_API_KEY,
+        model=config.NEX_OCR_MODEL, max_tokens=config.NEX_OCR_MAX_TOKENS,
+        timeout=config.NEX_OCR_TIMEOUT, engine="nex-n2-pro", disable_thinking=True,
+    )
+
+
+def _call_deepseek_ocr(png_bytes: bytes) -> str:
+    """Transcribe via a DeepSeek (OpenAI-compatible) VISION endpoint (path 3)."""
+    return _call_openai_ocr(
+        png_bytes,
+        endpoint=config.openai_chat_endpoint(config.DEEPSEEK_OCR_BASE_URL),
+        api_key=config.DEEPSEEK_OCR_API_KEY, model=config.DEEPSEEK_OCR_MODEL,
+        max_tokens=config.DEEPSEEK_OCR_MAX_TOKENS, timeout=config.DEEPSEEK_OCR_TIMEOUT,
+        engine="deepseek-vision",
+    )
 
 
 # ── Path 2: send the drawing straight to the general AI (Claude vision) ──────
@@ -277,13 +299,17 @@ def list_models() -> dict:
     """
     nex_ok = config.ocr_configured()
     claude_ok = claude_vision_available()
+    deepseek_ok = deepseek_vision_available()
     models = [
         {"id": "nex", "label": "nex-n2-pro 专用 OCR", "available": nex_ok},
+        {"id": "deepseek", "label": "DeepSeek 视觉", "available": deepseek_ok},
         {"id": "claude", "label": "Claude 视觉", "available": claude_ok},
         {"id": "auto", "label": "自动（nex 失败回退 Claude）", "available": nex_ok or claude_ok},
     ]
     if nex_ok:
         default = "nex"
+    elif deepseek_ok:
+        default = "deepseek"
     elif claude_ok:
         default = "claude"
     else:
@@ -297,10 +323,41 @@ def warmup() -> bool:
     return config.ocr_configured()
 
 
+def _run_openai_ocr(image_bytes: bytes, caller, engine: str) -> dict:
+    """Preprocess the image, call one OpenAI-compatible OCR `caller`, and map the
+    outcome to the shared {"text", "status"} contract. Used by every OpenAI-protocol
+    OCR engine (nex-n2-pro, DeepSeek vision) so they share one failure ladder."""
+    try:
+        png_bytes = _preprocess(image_bytes)
+    except Exception:
+        png_bytes = image_bytes  # fall back to the raw upload
+
+    try:
+        raw = caller(png_bytes)
+    except (TimeoutError, socket.timeout):
+        print(f"[recognize] {engine} timed out (gateway slow/congested).")
+        return {"text": "", "status": "timeout"}
+    except urllib.error.URLError as e:
+        # A read timeout often surfaces here wrapping a socket timeout.
+        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+            return {"text": "", "status": "timeout"}
+        print(f"[recognize] {engine} gateway error: {e}")
+        return {"text": "", "status": "error"}
+    except (urllib.error.HTTPError, json.JSONDecodeError) as e:
+        print(f"[recognize] {engine} gateway error: {e}")
+        return {"text": "", "status": "error"}
+    except Exception as e:
+        print(f"[recognize] {engine} unexpected error: {e}")
+        return {"text": "", "status": "error"}
+
+    text = _clean_transcription([raw])
+    return {"text": text, "status": "ok" if text else "empty"}
+
+
 def recognize_detailed(image_bytes: bytes) -> dict:
     """
-    Recognise the handwritten math, returning {"text", "status"} so the caller
-    can tell apart the failure modes (which all look like "" otherwise):
+    Recognise the handwritten math via nex-n2-pro, returning {"text", "status"} so
+    the caller can tell apart the failure modes (which all look like "" otherwise):
 
       status: "ok"           — got a transcription
               "empty"        — gateway answered but read no legible math
@@ -310,32 +367,20 @@ def recognize_detailed(image_bytes: bytes) -> dict:
     """
     if not config.ocr_configured():
         return {"text": "", "status": "unconfigured"}
+    return _run_openai_ocr(image_bytes, _call_nex_ocr, "nex-n2-pro")
 
-    try:
-        png_bytes = _preprocess(image_bytes)
-    except Exception:
-        png_bytes = image_bytes  # fall back to the raw upload
 
-    try:
-        raw = _call_nex_ocr(png_bytes)
-    except (TimeoutError, socket.timeout):
-        print("[recognize] nex-n2-pro timed out (gateway slow/congested).")
-        return {"text": "", "status": "timeout"}
-    except urllib.error.URLError as e:
-        # A read timeout often surfaces here wrapping a socket timeout.
-        if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
-            return {"text": "", "status": "timeout"}
-        print(f"[recognize] gateway error: {e}")
-        return {"text": "", "status": "error"}
-    except (urllib.error.HTTPError, json.JSONDecodeError) as e:
-        print(f"[recognize] gateway error: {e}")
-        return {"text": "", "status": "error"}
-    except Exception as e:
-        print(f"[recognize] unexpected error: {e}")
-        return {"text": "", "status": "error"}
+def deepseek_vision_available() -> bool:
+    """True when the DeepSeek OCR (vision) endpoint is configured in .env."""
+    return config.deepseek_ocr_configured()
 
-    text = _clean_transcription([raw])
-    return {"text": text, "status": "ok" if text else "empty"}
+
+def recognize_via_deepseek(image_bytes: bytes) -> dict:
+    """Path-3 recognition: transcribe handwriting with a DeepSeek (OpenAI-compatible)
+    VISION model. Same {"text", "status"} contract as recognize_detailed()."""
+    if not config.deepseek_ocr_configured():
+        return {"text": "", "status": "unconfigured"}
+    return _run_openai_ocr(image_bytes, _call_deepseek_ocr, "deepseek-vision")
 
 
 def recognize_image(image_bytes: bytes) -> str:

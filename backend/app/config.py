@@ -107,6 +107,66 @@ CLAUDE_RATE_PER_HOUR: int = int(os.environ.get("CLAUDE_RATE_PER_HOUR", "60"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  MULTI-PROVIDER LLMs — DeepSeek / GPT (OpenAI-compatible) alongside Claude
+# ═══════════════════════════════════════════════════════════════════════════
+# The tutor is no longer Claude-only. Besides the Anthropic-compatible gateway
+# above (protocol "anthropic"), we also speak the OpenAI Chat Completions
+# protocol ("openai") so DeepSeek and GPT models can generate questions, grade
+# answers, and answer help chats too. providers.py assembles the model catalogue
+# from the per-provider settings below; claude_service.complete() dispatches by
+# each model's protocol. Every provider degrades gracefully: a provider with no
+# BASE_URL/API_KEY is simply "not usable" and its models never enter the pool.
+#
+# WHICH MODELS STUDENTS SEE is NOT decided here alone — see model_policy.py:
+# the admin can enable/disable models and force one at runtime. This file only
+# supplies the CANDIDATE catalogue + defaults. (Admin-only control — never expose
+# the enable/force switch to students. See docs/MODELS_AND_PROVIDERS.md.)
+
+# ── DeepSeek (OpenAI-compatible) ────────────────────────────────────────────
+DEEPSEEK_BASE_URL: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+DEEPSEEK_API_KEY: str = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODELS: List[Dict[str, str]] = _parse_models(
+    os.environ.get(
+        "DEEPSEEK_MODELS",
+        "deepseek-chat|DeepSeek Chat,"
+        "deepseek-reasoner|DeepSeek Reasoner",
+    )
+)
+
+# ── OpenAI / GPT (OpenAI-compatible) ────────────────────────────────────────
+OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com").rstrip("/")
+OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODELS: List[Dict[str, str]] = _parse_models(
+    os.environ.get(
+        "OPENAI_MODELS",
+        "gpt-4o|GPT-4o,"
+        "gpt-4o-mini|GPT-4o mini",
+    )
+)
+
+# Optional: force ALL students onto a single model id (admin "强制分配"). Blank
+# means "no forced default" (students choose freely within the enabled pool).
+# This is only the .env-level default; model_policy.py can override it at runtime.
+LLM_FORCED_MODEL: str = os.environ.get("LLM_FORCED_MODEL", "").strip()
+
+# Usernames (comma-separated) auto-granted the "admin" role on sign-up / at
+# startup — the only accounts allowed to toggle model availability / force a
+# model. Students can NEVER reach those controls (see model_policy.py + main.py).
+ADMIN_USERNAMES: List[str] = [
+    u.strip() for u in os.environ.get("ADMIN_USERNAMES", "").split(",") if u.strip()
+]
+
+
+def openai_chat_endpoint(base_url: str) -> str:
+    """Full chat-completions URL for an OpenAI-compatible base. Appends /v1 only
+    when the base does not already end in it (mirrors ocr_endpoint())."""
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/v1"):
+        return base + "/chat/completions"
+    return base + "/v1/chat/completions"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  HANDWRITING OCR — nex-n2-pro (OpenAI-compatible vision, SEPARATE endpoint)
 # ═══════════════════════════════════════════════════════════════════════════
 # The whiteboard PNG is sent to an OpenAI-compatible /chat/completions endpoint
@@ -138,6 +198,25 @@ def ocr_endpoint() -> str:
 def ocr_configured() -> bool:
     """True when the OCR gateway has a URL and key."""
     return bool(NEX_OCR_BASE_URL and NEX_OCR_API_KEY)
+
+
+# ── DeepSeek OCR (OpenAI-compatible vision) ─────────────────────────────────
+# A THIRD handwriting-OCR engine besides nex-n2-pro and Claude vision: post the
+# whiteboard image to a DeepSeek (or any OpenAI-compatible) VISION endpoint as an
+# image_url. The model MUST be multimodal — a text-only DeepSeek model cannot read
+# images. Configure a vision-capable model id in DEEPSEEK_OCR_MODEL. Unset → the
+# engine reports itself unavailable and callers fall back, same as nex.
+DEEPSEEK_OCR_BASE_URL: str = os.environ.get(
+    "DEEPSEEK_OCR_BASE_URL", DEEPSEEK_BASE_URL).rstrip("/")
+DEEPSEEK_OCR_API_KEY: str = os.environ.get("DEEPSEEK_OCR_API_KEY", DEEPSEEK_API_KEY)
+DEEPSEEK_OCR_MODEL: str = os.environ.get("DEEPSEEK_OCR_MODEL", "deepseek-vl")
+DEEPSEEK_OCR_TIMEOUT: float = float(os.environ.get("DEEPSEEK_OCR_TIMEOUT", "90"))
+DEEPSEEK_OCR_MAX_TOKENS: int = int(os.environ.get("DEEPSEEK_OCR_MAX_TOKENS", "1500"))
+
+
+def deepseek_ocr_configured() -> bool:
+    """True when the DeepSeek OCR endpoint has a URL and key."""
+    return bool(DEEPSEEK_OCR_BASE_URL and DEEPSEEK_OCR_API_KEY)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

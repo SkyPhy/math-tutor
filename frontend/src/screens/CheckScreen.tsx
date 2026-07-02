@@ -21,7 +21,7 @@ const RENDER_MODES: Array<{ value: RenderMode; label: string }> = [
 ];
 
 export function CheckScreen({ active }: { active: boolean }) {
-  const { workFlow, navTo, navHome, ocrText, problem, sessionId, setStudentWork, setRenderMode } = useStore();
+  const { workFlow, navTo, navHome, ocrText, problem, sessionId, setStudentWork, setRenderMode, model } = useStore();
 
   const [content, setContent] = useState('');
   const [mode, setMode] = useState<RenderMode>('3');
@@ -118,6 +118,7 @@ export function CheckScreen({ active }: { active: boolean }) {
         answer: content,
         session_id: sessionId,
         question_id: problem?.id,
+        model,
       });
       setGrade(res);
       setNote(null);

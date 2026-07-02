@@ -1417,3 +1417,53 @@
 .storyboard-caption { color: var(--text-dim); font-size: 0.88rem; line-height: 1.5; }
 .storyboard-controls { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 .storyboard-count { color: var(--text-dim); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+
+/* ── AI model picker (fixed top-left header bar) + admin panel (v0.4.11) ──────
+   The student picks the model used for generation / grading / help from the
+   admin-opened pool. The ⚙ opens the ADMIN-ONLY panel (backend require_admin
+   gates all writes — a student can open it but cannot pass the admin sign-in). */
+.model-controls {
+    position: fixed; top: 14px; left: 16px; z-index: 50;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; background: var(--glass-bg);
+    border: 1px solid var(--glass-border); border-radius: 999px;
+    backdrop-filter: blur(10px);
+}
+.model-label { font-size: 0.78rem; color: var(--text-dim); }
+.model-select { max-width: 220px; }
+.model-select:disabled { opacity: 0.7; cursor: not-allowed; }
+.model-locked { font-size: 0.9rem; }
+.model-admin-btn {
+    border: none; background: transparent; cursor: pointer; font-size: 1rem;
+    line-height: 1; padding: 2px 4px; border-radius: var(--radius-sm); color: var(--text-dim);
+}
+.model-admin-btn:hover { color: var(--text-main); }
+
+/* Admin model-control modal overlay. */
+.admin-overlay {
+    position: fixed; inset: 0; z-index: 100; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(3px);
+}
+.admin-panel {
+    width: min(640px, 92vw); max-height: 88vh; overflow: auto;
+    background: var(--surface, #14161c); color: var(--text-main);
+    border: 1px solid var(--glass-border); border-radius: var(--radius-md, 12px);
+    padding: 18px 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.admin-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.admin-close { padding: 3px 10px; }
+.admin-hint { font-size: 0.82rem; color: var(--text-dim); line-height: 1.6; }
+.admin-signin { display: flex; flex-direction: column; gap: 10px; }
+.admin-input {
+    background: rgba(var(--surface-rgb), 0.06); border: 1px solid var(--glass-border);
+    color: var(--text-main); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 0.9rem;
+}
+.admin-body { display: flex; flex-direction: column; gap: 14px; }
+.admin-forced { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.88rem; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.admin-table th, .admin-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--glass-border); }
+.admin-table th { color: var(--text-dim); font-weight: 600; }
+.admin-mid { color: var(--text-dim); font-size: 0.75rem; margin-left: 6px; }
+.admin-row-unusable { opacity: 0.5; }
+.admin-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

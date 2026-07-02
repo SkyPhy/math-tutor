@@ -14,7 +14,7 @@ import type { ChatMsg } from '../types';
 //     final answer), shown as the opening assistant turn.
 //   • free Q&A → POST /claude/chat, grounded on the problem, Socratic (won't dump answers).
 export function AskScreen({ active }: { active: boolean }) {
-  const { problem, sessionId } = useStore();
+  const { problem, sessionId, model } = useStore();
 
   const [thread, setThread] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
@@ -39,7 +39,7 @@ export function AskScreen({ active }: { active: boolean }) {
     setAnalyzing(true);
     setErr(null);
     try {
-      const res = await analyzeProblem(expr);
+      const res = await analyzeProblem(expr, model);
       const text = analyzeText(res) || '（暂无解析——可直接在下面提问。）';
       setProvider(res.ai_provider);
       setThread((t) => [...t, { role: 'assistant', content: '🔍 **解析此题**\n\n' + text }]);
@@ -61,6 +61,7 @@ export function AskScreen({ active }: { active: boolean }) {
         session_id: sessionId,
         history: prior,
         allow_special: meta?.allowSpecial,
+        model,
       });
       setProvider(res.provider);
       const reply = res.reply || (res.reason ? `（${res.reason}）` : '（AI 暂时无法回答，请稍后再试。）');

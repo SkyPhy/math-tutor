@@ -20,6 +20,30 @@ import json
 from typing import Dict, Any, Optional, List
 
 
+# ── SymPy compute-tool contract (shared) ────────────────────────────────────
+# SymPy is retired from JUDGING, but the AI MAY use it as an on-demand exact
+# CALCULATOR mid-answer: it writes an expression in <sympy>…</sympy>, the backend
+# computes it and hands the LaTeX result back wrapped in <sympya>…</sympya> (same
+# order), and the model continues from there. This block is injected verbatim into
+# the free-form reasoning prompts (chat / assistant follow-up); the loop is driven
+# by sympy_compute.complete_with_compute. Keep this text in sync with that module.
+SYMPY_TOOL_GUIDE = (
+    "\n\n【SymPy 运算工具（可选，用于精确计算，不用于判分）】\n"
+    "- 当你需要一个**你不放心心算**的精确结果（繁杂积分/求导、因式分解、方程求解、"
+    "大数或分数运算、化简等）时，可以把要算的式子用 `<sympy>…</sympy>` 包起来写在回复里，"
+    "后端的 SymPy 会计算它，并在下一轮把结果（LaTeX）按**相同顺序**放进 `<sympya>…</sympya>` 交还给你，"
+    "你据此继续往下推。\n"
+    "- 里面写**合法的 SymPy 表达式**（Python/SymPy 语法，非 LaTeX）：如 "
+    "`solve(x**2 - 5*x + 6, x)`、`integrate(sin(x), (x, 0, pi))`、`factor(x**4 - 1)`、"
+    "`2/4 + 1/6`、`diff(x**3 + 2*x, x)`。乘号用 `*`、乘方用 `**`。一个 `<sympy>` 只写一个式子，"
+    "一次可写多个 `<sympy>` 块。\n"
+    "- 只在**确有必要**时使用；简单的一步心算不必调用。拿到 `<sympya>` 里的结果后要**自己核对**"
+    "它是否合理，再继续。\n"
+    "- **最终给学生看的回复里，不要出现任何 `<sympy>` 或 `<sympya>` 标签**——它们只是你和后端之间的"
+    "运算通道，学生不应看到。"
+)
+
+
 # Hint-level contract shared with the template SocraticEngine (levels 0–4).
 _HINT_LEVEL_GUIDE = {
     0: "Restate the problem in your own words and ask the student what KIND of "
@@ -141,7 +165,7 @@ Guidelines:{special_note}
   renders code as-is and, for a description, generates the code for you. Add at most
   one such block and only when it truly aids understanding.
 - Keep replies focused and conversational — usually 1–4 sentences.
-- Stay on mathematics and learning; gently redirect off-topic requests."""
+- Stay on mathematics and learning; gently redirect off-topic requests.{SYMPY_TOOL_GUIDE}"""
 
 
 def build_solve_prompt(problem: str, angle: str = "") -> str:
@@ -174,6 +198,32 @@ Rules:
 - Reduce numbers to simplest form (e.g. "1/2" not "2/4", "7" not "7.0").
 - For yes/no questions answer "true" or "false". For several solutions, comma-separate them.
 - If the problem is genuinely unanswerable, set final_answer to "" and confidence to 0."""
+
+
+def build_answer_judge_prompt(problem: str, reference: str) -> str:
+    """System prompt for judging a student's answer against a KNOWN-correct
+    reference answer — the post-SymPy grading path (2026-07-02).
+
+    The `reference` is authoritative (the bank question's stored answer, which also
+    holds 学科网-fetched answers, or a prior AI consensus). The model's ONLY job is
+    to decide whether the student's final answer is mathematically EQUIVALENT to it
+    — same value / set / meaning up to trivial rewriting (1/2 = 0.5, 25π ≈ 78.54,
+    order-independent sets, with or without units). Strict JSON out so the backend
+    can read the verdict mechanically. No CAS is involved anywhere."""
+    return f"""你是一位严谨的数学阅卷老师。下面给出一道题、它的**标准答案**，以及学生的作答。
+你的唯一任务是判断**学生的最终答案是否与标准答案在数学上等价**（即是否正确）。
+
+题目：{problem}
+标准答案（权威，判分以它为准）：{reference}
+
+判定原则：
+- 只看**最终答案是否正确**，不纠结书写格式：1/2 与 0.5、25π 与约 78.54、集合 {{2, -3}} 与
+  {{-3, 2}}、带不带单位、等价的代数式，都算**正确**。
+- 学生若只写了过程而没有明确答案，或答案与标准答案在数值/意义上不符，判为**错误**。
+- 拿不准时以数学等价性为准，依据标准答案而非学生的措辞。
+
+只输出一个严格 JSON 对象，不要解释、前后缀或代码块：
+  {{"correct": <true 或 false>, "confidence": <0.0 到 1.0>}}"""
 
 
 def build_exam_prompt(dimension: str, subdims: Dict[str, List[str]],
@@ -396,7 +446,7 @@ def build_assistant_chat_system(problem: str,
   4 保持平衡</manim>`），也可**直接写可运行的 Manim CE 代码**（以 `from manim import *` 开头、恰好一个
   `class …(Scene)`）。应用会把代码原样渲染；只给说明时则自动为你生成代码。确实有助于理解时才加。
 - 回答简洁、专业严谨而易懂，通常 1–4 句，聚焦学生问的那一步。{special_note}{mode_note}
-- 只谈数学与学习，礼貌地把跑题的请求带回来。"""
+- 只谈数学与学习，礼貌地把跑题的请求带回来。{SYMPY_TOOL_GUIDE}"""
 
 
 def to_messages(history: List[Dict[str, str]], user_message: str) -> List[Dict[str, str]]:

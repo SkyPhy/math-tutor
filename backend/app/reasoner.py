@@ -22,10 +22,17 @@ self-contained numeric normaliser (Python `fractions` + a safe `ast` arithmetic
 evaluator), so "1/2", "0.5", " 0.50 " and "1 / 2" all collapse to one canonical
 value without any external CAS.
 
-Everything degrades gracefully: if the gateway is unavailable, or fewer than two
-independent paths come back parseable, the reasoner returns an "undetermined"
-verdict (correct=None) and the caller falls back to a non-authoritative SymPy
-cross-check so offline grading of simple algebra still works.
+When a question already carries a KNOWN-correct answer (the bank's stored answer —
+which also holds 学科网-fetched answers — or a prior consensus), grading does NOT
+re-solve: `grade_with_reference()` compares the student's answer to that answer
+directly, first with the SymPy-free numeric normaliser below (works offline) and,
+if that does not settle it, with a single LLM equivalence judge. SymPy has fully
+retired from judging (2026-07-02): there is no CAS anywhere on the grading path.
+
+Everything degrades gracefully: if the gateway is unavailable and the numeric
+normaliser cannot settle a comparison, the reasoner returns an "undetermined"
+verdict (correct=None) and the caller declines to guess rather than reaching for
+a CAS.
 """
 
 import ast
@@ -368,9 +375,12 @@ class LLMReasoner:
         correct = _values_match(student_answer, sol["answer"])
         votes_label = f"consensus({sol['votes']}/{sol['total_paths']})"
         if correct:
+            # Only a correct submission may see the answer (it is revealed then).
             reason = f"答案正确。多条独立推导一致得到 {sol['answer']}。"
         else:
-            reason = f"答案有误：多条独立推导一致得到 {sol['answer']}。"
+            # Do NOT leak the agreed answer on a miss — it stays backend-only until
+            # the student gets it right.
+            reason = "答案与标准答案不一致，请再检查。"
 
         return {
             "correct": bool(correct),
@@ -381,6 +391,92 @@ class LLMReasoner:
             "reason": reason,
             "consensus": sol,
         }
+
+    # ── judge against a KNOWN-correct reference answer (SymPy-free) ──────
+    def match(self, reference: Any, student_answer: Any) -> bool:
+        """Deterministic, SymPy-free equality between a student answer and a
+        KNOWN reference answer (the numeric/canonical normaliser). Works offline;
+        used as the fast path before any model call."""
+        return _values_match(student_answer, reference)
+
+    def judge_against_reference(
+        self,
+        problem: str,
+        reference: str,
+        student_answer: str,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Optional[bool]:
+        """Ask the model whether the student's answer is mathematically equivalent
+        to a KNOWN-correct reference answer. SymPy-free. Returns True/False, or
+        None when the gateway is down or the reply is unparseable."""
+        if not claude_service.available():
+            return None
+        system = prompts.build_answer_judge_prompt(problem, reference)
+        user = (f"学生的作答：{student_answer}\n"
+                "请判断是否正确，只输出 JSON 对象。")
+        try:
+            text = claude_service.complete(
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                model=model,
+                session_id=session_id or "judge",
+                max_tokens=200,
+                temperature=0.0,
+            )
+        except ClaudeError:
+            return None
+        obj = _parse_json_object(text)
+        if not obj or "correct" not in obj:
+            return None
+        val = obj.get("correct")
+        if isinstance(val, bool):
+            return val
+        s = str(val).strip().lower()
+        if s in ("true", "1", "yes", "correct", "对", "正确"):
+            return True
+        if s in ("false", "0", "no", "incorrect", "错", "错误"):
+            return False
+        return None
+
+    def grade_with_reference(
+        self,
+        problem: str,
+        reference: str,
+        student_answer: str,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Grade a student's answer against a KNOWN-correct reference answer (the
+        bank's stored answer / 学科网 answer / a prior consensus) — the primary
+        grading path, with NO SymPy. Numeric/canonical match first (offline-capable);
+        if that does not match, one LLM equivalence judge decides.
+
+        Returns {correct: Optional[bool], judged_by, reason, ground_truth?}.
+        `ground_truth` (the answer itself) is included ONLY when correct, so the
+        answer is never leaked on a miss."""
+        ref = (reference or "").strip()
+        if not ref:
+            return {"correct": None, "judged_by": None, "reason": None}
+
+        # Fast, offline-capable path: exact numeric/canonical equality.
+        if self.match(ref, student_answer):
+            return {"correct": True, "judged_by": "answer-key",
+                    "reason": "答案正确。", "ground_truth": ref}
+
+        # Not a literal match — could still be equivalent (different form / units /
+        # π & decimals). Let the model judge equivalence against the known answer.
+        verdict = self.judge_against_reference(
+            problem, ref, student_answer, model=model, session_id=session_id)
+        if verdict is None:
+            # Gateway down and no deterministic match → decline to guess.
+            return {"correct": None, "judged_by": "answer-key",
+                    "reason": "暂时无法判定，请稍后再试。"}
+        if verdict:
+            return {"correct": True, "judged_by": "answer-key",
+                    "reason": "答案正确。", "ground_truth": ref}
+        return {"correct": False, "judged_by": "answer-key",
+                "reason": "答案与标准答案不一致，请再检查。"}
 
 
 # Singleton used across the app.

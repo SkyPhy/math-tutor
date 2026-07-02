@@ -11,6 +11,111 @@
 
 ---
 
+## v0.4.12a — 多模型提供商（Claude/DeepSeek/GPT）+ 管理员可用池 + DeepSeek OCR（用户反馈）
+
+用户要求：把 **AI 生成题目、答案判分、帮助回答**的提供商从「只有 Claude」扩展为**多模型**（加入 DeepSeek、GPT 等）；
+**学生可在管理员开放的范围内自选自己所用的模型**，且**「模型可用/不可用 + 强制分配」的开关只归管理员、学生不可控**
+（并**写入开发文档提醒后人**）；**OCR 识别新增 DeepSeek**。判分/共识/诊断内核零改动，仍走 学科网/DB 答案键 → LLM 共识
+（见 [[consensus-validation-status]]）。
+
+- **统一模型目录 + 双协议传输层**：新增 `backend/app/providers.py`（候选模型目录 + `resolve_model` 唯一收口 + `usable`
+  判定 + 学生池/管理员目录装配）。`claude_service.complete()` **签名不变**，改为按模型**协议分发**：`anthropic`
+  → `{base}/v1/messages`（Claude）、`openai` → `{base}/v1/chat/completions`（DeepSeek/GPT，`system` 转首条 system 消息）；
+  断路器**按提供商分桶**，一个提供商故障不牵连其它。`reasoner.py`/`sympy_compute.py`/`main.py` 调用点零改动。
+- **管理员可用池（两者结合）**：新增 `backend/app/model_policy.py`（SQLite `data/model_policy.db`）存每模型 `enabled`
+  覆盖 + 全局 `forced_model`，运行时可改、重启留存；无覆盖行回落 `.env` 默认。`.env` 亦可用 `LLM_FORCED_MODEL` 设启动默认。
+  **学生池 = usable（提供商已配 .env）∧ admin-enabled**；`resolve_model` 把学生请求**一律夹回池内**，被强制模型则覆盖——
+  学生无法调用池外/被禁用的模型。
+- **管理员角色（auth.py）**：`users` 加 `role` 列（幂等迁移旧库），`ADMIN_USERNAMES`（.env）在注册/每次启动时授予
+  `admin`；`_public_user` 带出 `role`。**无任何应用内自我提权途径**。
+- **接口**：`GET /models`（学生可选池 + 默认 + `forced_model`）、`GET /claude/models`（向后兼容别名）、
+  `GET/POST /admin/models`（全量目录 / 开关模型 + 设或清强制）——写操作由 `require_admin` 把关（未登录 401、非管理员 403）。
+  出题生成 `/practice/next` 与 `_ai_one_question` 补 `model` 形参，判分 `/verify`、答疑 `/analyze`·`/claude/chat`、
+  助手 `/assistant/*` 的 `provider`/`ai_provider` 标签改用**实际解析出的**「provider:model」。
+- **OCR 加 DeepSeek**（`recognize.py`）：抽出通用 `_call_openai_ocr` 复用给 nex 与 DeepSeek，新增 `recognize_via_deepseek`
+  与 `/recognize/models` 的 `deepseek` 项（视觉端点走 OpenAI 兼容 `image_url`，配置 `DEEPSEEK_OCR_*`；未配置则 `available:false`
+  优雅降级）。`/recognize?method=deepseek` 分发到新路径。
+- **前端**：`store.tsx` 新增全局 `model`/`models`/`forcedModel`（启动拉 `GET /models`，被强制时**锁定选择**）；头部新增
+  `ModelControls`（学生选模型）与 `AdminModels`（**仅管理员**登录后开关模型/强制分配）；`model` 透传进出题/判分/答疑/助手
+  的所有 AI 调用；`api.ts`/`types.ts` 补 `fetchModels`/`signIn`/`adminGetModels`/`adminSetModels` 与类型。
+- **文档（应用户"提醒后人"要求）**：新增 `docs/MODELS_AND_PROVIDERS.md`——写明多提供商架构**与管理员控制契约**：
+  可用/不可用与强制分配是**仅管理员**权限、学生绝不能碰，前端不得暴露该开关；`DEVELOPMENT_PLAN.md`（补齐"缺多模型"差距）、
+  `FRONTEND_GUIDE.md`、`.env.example` 同步。
+- **验收**：`py -3.12 backend/test_reasoner_offline.py` 判分核 44 例全过（**零回归**）；离线校验 `resolve_model` 池夹取/强制
+  覆盖/禁用；起服实测 `GET /models`、`/admin/models` 未授权 401、管理员开关+强制后学生池随动、**非管理员 403**、
+  `/recognize/models` 出现 DeepSeek；前端 `npm run build` 通过。
+
+## v0.4.11a — SymPy 回归为「AI 运算工具」（非判分）：<sympy>…</sympy> 请求 → 后端算 → <sympya>…</sympya> 回填
+
+用户要求：**判分层面 SymPy 依旧完全放弃**（判分仍走 学科网/DB 答案键 → LLM 共识，见 [[consensus-validation-status]]），
+但在 **AI 解答的运算层**给 AI 一个精确计算器——AI 把要算的式子用 `<sympy>…</sympy>` 包起来，后端 SymPy 计算后把
+**LaTeX 结果按相同顺序**放进 `<sympya>…</sympya>` 回填给 AI，AI 拿到结果继续往下推。判分/共识/诊断内核零改动。
+
+- **新独立模块 `backend/app/sympy_compute.py`**：①`_compute_one` 在**锁死的命名空间**里用 `parse_expr`
+  （`global_dict={}` 无内置、未知字母自动成符号、`convert_xor` 支持 `^`）求值——数字自动转精确 `Rational`
+  （`2/4+1/6`→`2/3`），支持 `solve/integrate/diff/factor/limit/summation/Matrix…`，结果经 `sympy.latex` 转 LaTeX；
+  危险源串（`__…__`、import、exec、os./sys.、lambda、getattr…）在求值**前**直接拒绝，纯 eval 之上再加护栏。
+  ②`complete_with_compute` 驱动**多轮工具循环**：调用模型→扫 `<sympy>`→算→把 `<sympya>` 结果作为下一轮 user 轮
+  回填→模型续推，直至无请求或封顶 `DEFAULT_ROUNDS=4`（防跑飞）；最终回复 `strip_tags` 去除全部工具标签，学生不可见。
+- **接入两处自由问答面**（AI 解答面，非判分面）：`/claude/chat`（`main.py`）与助手屏逐行追问 `assistant.ask`
+  改用 `complete_with_compute`（与 `claude_service.complete` 同签名同 `ClaudeError` 契约，原有降级不变）。
+- **提示词契约（`prompts.py`）**：新增共享 `SYMPY_TOOL_GUIDE`，注入 `build_chat_system` 与
+  `build_assistant_chat_system`——告知 AI 何时/如何写 `<sympy>`（Python/SymPy 语法、非 LaTeX、`*`/`**`）、
+  结果从 `<sympya>` 取、须**自查结果合理性**、**最终回复不得残留标签**。判分相关提示词一字未改。
+- **验收（离线）**：新增 `backend/test_sympy_compute_offline.py`（37 例，零 pytest 依赖，网关无关）——
+  求值/LaTeX、危险输入拒绝、`find_requests` 只认 `<sympy>` 不认 `<sympya>`、`strip_tags`、`build_feedback` 配对全过；
+  `py -3.12 backend/test_reasoner_offline.py` 判分核 44 例仍全过（**判分零回归**）；用假网关模拟两轮循环，
+  确认根 `[2,3]` 以 `<sympya>` 回填、最终回复无标签。
+
+## v0.4.10c — LaTeX 一律行内融合（用户反馈）：$$…$$ / \[…\] 不再独占一行 + 渲染策略独立成模块
+
+用户要求：前端**所有** LaTeX 渲染都**融合进句子、不单独分一行**（例「由 $$x^2=1$$ 得 $$x=\pm1$$」应是一行），
+并把这些渲染逻辑**写成独立模块**。**判分/共识/诊断内核零改动；纯前端。**
+
+- **新独立模块 `lib/mathRender.ts`**：作为「数学分隔符策略」的**单一真源**。`asInlineMath(latex)` 把裸公式包成
+  行内 `\(…\)`；`inlineMathDelimiters(src)` 把 `$$…$$`、`\[…\]`、`$…$` **一律改写为行内 `\(…\)`**（display →
+  inline），从而不再独占一行。所有渲染路径改为从此模块取，策略只此一处。
+- **各渲染路径接入**：`lib/markdown.ts`（聊天日志/预览、校对屏、助手屏共用）先 `inlineMathDelimiters` 归一再护
+  span 交给 marked；`MathText`、`ManimView` 故事板帧、`ProblemBody`（已分隔分支归一 + 被抽出的 `latex` 由
+  `\[…\]` 改为行内融合）统一走 `asInlineMath`——全站不再产出 display 公式。
+- **MathJax 兜底（`index.html`）**：`displayMath: []`，把 `$$`/`\[` 也登记为 **inline**——任何绕过渲染模块直达
+  MathJax 的内容也不会独占一行。
+- **验收（运行—观测）**：`tsc --noEmit` 0 错、`vite build` 成功；**headless Chrome 截图**——答疑屏预览把
+  「由 $$x^2=1$$ 得 $$x=\pm1$$；也可写 \[a+b=c\] 与行内 $e=mc^2$」渲染成**一整行融合**、无 display 换行。
+
+## v0.4.10b — 后端日志中文/emoji 乱码修复（用户反馈）
+
+后端启动日志（`[startup] 题库就绪…`、✅ 等）在 Windows 控制台显示乱码。根因有二：
+
+- **① start.bat 子窗口回落 GBK**：`chcp 65001` 只在**启动器窗口**执行；真正跑后端的是 `start … cmd /k`
+  **新开的控制台**，它**不继承**父窗口代码页，回落到系统默认 936/GBK。而 `PYTHONIOENCODING=utf-8` 是环境变量
+  被子进程继承——于是 Python 输出 UTF-8 字节、GBK 控制台照 GBK 解读 → 乱码。修法：在两个 `cmd /k` 命令链
+  **内部**各自 `chcp 65001`，并补 `PYTHONUTF8=1`。
+- **② 直接启动仍会乱码**：绕过 start.bat（如 `py -3.12 -m uvicorn`、VSCode 终端）时上面的修复不生效。故在
+  `main.py` 顶部加**进程内兜底**：`sys.stdout/stderr.reconfigure(encoding="utf-8", errors="backslashreplace")`
+  ——原地改流对象，uvicorn 的日志处理器共用同一对象故一并生效；`backslashreplace` 保证异常字形也绝不让日志
+  调用崩溃；POSIX 上是无害 no-op。
+- **验收（运行—观测）**：venv 的 py3.12 实测打印 `[startup] 题库就绪 … ✅ 中文日志不再乱码`、`stdout=utf-8`；
+  `app.main` 导入通过、`ast.parse` 语法通过。
+
+## v0.4.10a — 答案后台化 + SymPy 判分彻底退役 + 判分参考三来源（用户反馈）
+
+按用户三条要求改判分内核：①题目答案**只存后台**，学生**彻底提交且彻底改对后**才展示；②学生答案与
+AI 答案比对时 **SymPy 彻底退役**；③判分参考依次取「数据库该题答案 / 学科网 API 答案 / AI 自生成答案」。
+
+- **① 答案仅后台、答对才揭晓**：`/verify` 不再运行 SymPy 解题器（其 `verified_steps` 会把解答写出来 → 泄题），
+  响应精简为判分结果；参考答案 `ground_truth` **仅在判定为「对」时**才回传，答错/未判定一律不含答案。共识判分
+  的错误理由不再回显「多路一致得到 X」（改为「答案与标准答案不一致，请再检查」），杜绝从理由里读出答案。
+  题卡侧本就不含 `answer`（`_bank_to_card` 早已剥离），主界面不再有任何答案出口。
+- **② SymPy 退出判分**：`_check_student_answer` 删除对 `legacy.sympy_grader` 的回退调用并移除其 import；判分
+  路径上不再有任何 CAS。`NeuroSymbolicEngine`（仅 `/analyze`·`/hint` 渲染步骤用）保留，与判分无关。
+- **③ 判分参考三来源（有优先级）**：新增 `_reference_answer(question_id)` 取题库存的**权威答案**（AI 出题写入
+  或**学科网 API** 抓取时持久化的 `answer`，二者同存于 exams.db 该字段）；`reasoner.grade_with_reference()`
+  先用 **SymPy-free 数值规范化器**离线精确比对，不一致再用**一次 LLM 等价判定**（`prompts.build_answer_judge_prompt`，
+  容许 1/2=0.5、25π≈78.54、集合乱序、带/不带单位等价）。题库无存答时才回落到**多路 LLM 共识**由 AI 自生成参考答案。
+- **验收（运行—观测）**：`test_reasoner_offline.py` 44/44 通过；离线确定性路径 `1/2` vs `0.5` 判对并揭示参考答案、
+  错误答案不含 `ground_truth`；LLM 等价判定线上跑通（`7` vs `5` 判错且不泄答案）。三模块 `ast.parse` 语法通过。
+
 ## v0.4.9c — 聊天区可读性 + 彻底去边框 + Q&A 输入实时 LaTeX 预览（用户反馈 3 项）
 
 按用户反馈修三处：①聊天框颜色过深、文字看不清 ②卡片/边框感仍重、想「看不见边框」 ③Q&A 输入框下方缺

@@ -16,7 +16,7 @@ import type { AssistAnalysis, ChatMsg } from '../types';
 // fine (无误行留空). Clicking any row opens a follow-up chat grounded in that line
 // (POST /assistant/ask), each line keeping its own little conversation.
 export function AssistantScreen({ active }: { active: boolean }) {
-  const { problem, studentWork, renderMode, sessionId, navHome } = useStore();
+  const { problem, studentWork, renderMode, sessionId, navHome, model } = useStore();
 
   const [data, setData] = useState<AssistAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,6 +46,7 @@ export function AssistantScreen({ active }: { active: boolean }) {
         problem: problemText,
         student_work_md: studentWork,
         render_mode: renderMode,
+        model,
       });
       setData(res);
       analyzedRef.current = studentWork;
@@ -54,7 +55,7 @@ export function AssistantScreen({ active }: { active: boolean }) {
     } finally {
       setLoading(false);
     }
-  }, [studentWork, sessionId, problem?.id, problemText, renderMode]);
+  }, [studentWork, sessionId, problem?.id, problemText, renderMode, model]);
 
   // Analyse when the screen opens with fresh work (a new 提交 from the 校对屏).
   useEffect(() => {
@@ -84,6 +85,7 @@ export function AssistantScreen({ active }: { active: boolean }) {
         focus: line ? { idx: line.idx, content: line.content, analysis: line.analysis } : null,
         render_mode: renderMode,
         allow_special: meta?.allowSpecial,
+        model,
       });
       setChatProvider(res.provider);
       const reply = res.reply || (res.reason ? `（${res.reason}）` : '（AI 暂时无法回答，请稍后再试。）');

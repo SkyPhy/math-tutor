@@ -43,6 +43,42 @@ export interface RecognizeModel {
   label: string;
 }
 
+// ── AI models (multi-provider: Claude / DeepSeek / GPT) ───────────────────────
+// A model a STUDENT may pick, from GET /models. The pool itself is decided by the
+// admin (usable ∧ enabled) — the student can only choose within it.
+export interface LLMModel {
+  id: string;
+  label: string;
+  provider: string;        // 'claude' | 'deepseek' | 'openai'
+  provider_label: string;  // 'Claude' | 'DeepSeek' | 'GPT'
+}
+
+export interface ModelsResp {
+  available: boolean;
+  default_model: string;
+  forced_model: string | null;   // when set, the admin forced this model → lock the picker
+  models: LLMModel[];
+  status?: unknown;
+}
+
+// Admin-only view (GET /admin/models): the FULL catalogue with usable/enabled state.
+export interface AdminModel extends LLMModel {
+  usable: boolean;
+  enabled: boolean;
+}
+export interface AdminModelsResp {
+  models: AdminModel[];
+  forced_model: string | null;
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  email?: string | null;
+  role: string;            // 'admin' | 'student'
+  created_at?: string;
+}
+
 // ── Workspace (校对屏 personal draft library) ─────────────────────────────────
 // Render mode for the recognised text: 1 full md+latex render / 2 source-style /
 // 3 plain text (default).

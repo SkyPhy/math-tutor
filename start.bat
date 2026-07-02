@@ -7,6 +7,7 @@ REM + ffmpeg, so /manim/render produces real MP4s. The venv\Scripts dir is put o
 REM PATH ahead of the process so manim_render.available() (shutil.which) finds both.
 chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
 set "VENV=%~dp0backend\.venv"
 
 REM --- Bootstrap venv on first run (or if it went missing) -------------------
@@ -24,8 +25,13 @@ if not exist "%VENV%\Scripts\ffmpeg.exe" (
 )
 
 REM --- Launch: prepend venv\Scripts so manim + ffmpeg are on PATH ------------
-start "math-tutor-backend"  cmd /k "cd /d "%~dp0backend" && set "PATH=%VENV%\Scripts;%PATH%" && "%VENV%\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
-start "math-tutor-frontend" cmd /k "cd /d "%~dp0frontend" && npm run dev"
+REM Each `start` opens a NEW console that does NOT inherit this window's code
+REM page, so it would fall back to the system default (GBK/936) and mangle the
+REM UTF-8 bytes Python emits (乱码). Re-run `chcp 65001` INSIDE each child so its
+REM console decodes stdout as UTF-8. (PYTHONIOENCODING/PYTHONUTF8 are env vars and
+REM ARE inherited, but they only control what Python WRITES, not how the console reads.)
+start "math-tutor-backend"  cmd /k "chcp 65001 >nul && cd /d "%~dp0backend" && set "PATH=%VENV%\Scripts;%PATH%" && "%VENV%\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+start "math-tutor-frontend" cmd /k "chcp 65001 >nul && cd /d "%~dp0frontend" && npm run dev"
 
 echo.
 echo   Backend  -^> http://localhost:8000/docs

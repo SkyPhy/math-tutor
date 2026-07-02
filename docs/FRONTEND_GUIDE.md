@@ -22,6 +22,11 @@
 - **白板**是 Excalidraw（`board/ExcalidrawBoard.ts` 封装），实例挂在 store 上、**跨屏存活**。
 - **动画**：`<manim>` 块 → `ManimView` → `POST /manim/render` → 真 MP4，装不了则回退浏览器故事板。
 - **主题**：深/浅色 + 可选主题色，CSS 变量驱动（见 §5），持久化到 localStorage。
+- **AI 模型选择**：全局头部 `ModelControls`（`components/ModelControls.tsx`）让学生在**管理员开放的
+  可用池**内选模型（`store.model`，来自 `GET /models`），透传进出题/判分/答疑/助手的所有 AI 调用。
+  ⚠️ **管理员专属**：模型的"可用/不可用 + 强制分配"开关只有管理员能改（`AdminModels` 面板需
+  `/auth/signin` 管理员登录，后端 `require_admin` 把关）。**新增任何模型相关 UI 时，绝不能让学生
+  改动可用池或强制项**——详见 [MODELS_AND_PROVIDERS.md](MODELS_AND_PROVIDERS.md)。被强制模型时选择器锁定。
 
 数据流一图流：
 ```

@@ -25,9 +25,19 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import config
 from . import prompts
+from . import providers  # multi-provider model catalogue (Claude / DeepSeek / GPT)
+from . import sympy_compute  # SymPy as an on-demand calculator for the AI (NOT a judge)
 from .claude_service import claude_service, ClaudeError
+
+
+def _provider_tag(requested_model: Optional[str]) -> str:
+    """"provider:model" label for the model a request actually runs on (after the
+    pool-clamp + forced override), so the UI can show who answered."""
+    mid = providers.resolve_model(requested_model)
+    entry = providers.get_model(mid)
+    prov = entry["provider"] if entry else "claude"
+    return f"{prov}:{mid}"
 
 # One tutor batch (all lines analysed in a single call) is short — well under the
 # exam-generation budget but more than a chat reply.
@@ -186,8 +196,7 @@ def analyze(problem: str,
         summary = (f"共 {len(rows)} 行，其中 {n_issues} 行有可改进点。"
                    if n_issues else f"共 {len(rows)} 行，看起来都没问题，很棒！")
 
-    model_id = config.valid_model(model or config.CLAUDE_DEFAULT_MODEL)
-    return {"lines": rows, "summary": summary, "provider": "claude:" + model_id}
+    return {"lines": rows, "summary": summary, "provider": _provider_tag(model)}
 
 
 def ask(message: str,
@@ -205,15 +214,16 @@ def ask(message: str,
     """
     if not claude_service.available():
         return {"reply": None, "provider": "unavailable", "available": False,
-                "reason": "Claude gateway not configured." if not config.is_configured()
-                          else "Claude temporarily unavailable (circuit breaker)."}
+                "reason": "AI 网关未配置（无可用模型）。" if not providers.enabled_pool()
+                          else "AI 暂时不可用（熔断中）。"}
     try:
         system = prompts.build_assistant_chat_system(
             problem, focus=focus, render_mode=render_mode, allow_special=allow_special)
         messages = prompts.to_messages(history or [], message)
-        reply = claude_service.complete(
+        # Service any <sympy>…</sympy> exact-calc requests the model makes and let it
+        # continue from the results (compute tool, not judging); same error contract.
+        reply = sympy_compute.complete_with_compute(
             system=system, messages=messages, model=model, session_id=session_id)
-        model_id = config.valid_model(model or config.CLAUDE_DEFAULT_MODEL)
-        return {"reply": reply, "provider": "claude:" + model_id, "available": True}
+        return {"reply": reply, "provider": _provider_tag(model), "available": True}
     except ClaudeError as e:
         return {"reply": None, "provider": "error", "available": False, "reason": str(e)}

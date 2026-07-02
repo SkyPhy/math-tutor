@@ -41,7 +41,7 @@ Math Solver"）。本计划做三件事：
 |---|---------|---------|------|------|
 | 1 | 四层架构：前端 | 多页前端，nex-n2-pro 视觉 OCR 把手写转表达式 | `web/*.html`、`backend/recognize.py` | ✅ 已实现 |
 | 2 | 四层架构：编排与逻辑层 | FastAPI 路由 + 会话状态 | `backend/main.py`（ALMAS Pipeline 注释）| 🟡 部分（缺"自演化触发器/监控环"）|
-| 3 | 四层架构：认知处理层（复合 AI）| Claude 经 Anthropic 兼容网关 + SymPy 共同推理 | `backend/claude_service.py`、`config.py` | 🟡 部分（缺多模型 conductor/expert）|
+| 3 | 四层架构：认知处理层（复合 AI）| **多提供商**：Claude(Anthropic) + DeepSeek/GPT(OpenAI 兼容) 统一经 `claude_service` 分发；学生在**管理员开放的可用池**内自选模型 | `backend/claude_service.py`、`config.py`、`providers.py`、`model_policy.py` | ✅ 已实现多模型（2026-07-02，见 [MODELS_AND_PROVIDERS.md](MODELS_AND_PROVIDERS.md)；conductor/expert 编排仍可深化）|
 | 4 | 四层架构：执行与验证层 | SymPy CAS 对**数学**确定性求解/校验 | `NeuroSymbolicEngine`（main.py） | 🟡 部分（无**代码**沙箱）|
 | 5 | Data Manager（JSON 架构树）| `/architecture` 返回手写的元数据树 | `ArchitectureNode`、`@app.get("/architecture")` | 🟠 仅描述（静态、非自动从目录/AST 生成）|
 | 6 | Blending Instructions（情境工程）| 把表达式+会话+动作编译成上下文 | `BlendingInstructions` 类 | 🟡 部分（用于提示词，未含"架构边界/不可变文件"）|

@@ -24,6 +24,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
+from . import config
+
 # All persistent data lives in backend/data/ (one level up from this app/
 # package), created on first import, so the SQLite files aren't scattered
 # through the backend source.
@@ -54,8 +56,23 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# ── Roles ──────────────────────────────────────────────────────────────────
+# Only "admin" and "student" exist. Admins are the ONLY accounts allowed to
+# toggle model availability / force a model (see model_policy.py + main.py's
+# require_admin). Admin usernames are seeded from config.ADMIN_USERNAMES (.env);
+# there is deliberately no in-app way for a student to promote themselves.
+ROLE_ADMIN = "admin"
+ROLE_STUDENT = "student"
+
+
+def _role_for(username: str) -> str:
+    """The role a username should have: admin iff listed in ADMIN_USERNAMES."""
+    return ROLE_ADMIN if (username or "") in config.ADMIN_USERNAMES else ROLE_STUDENT
+
+
 def init_db() -> None:
-    """Create the tables if they don't exist. Safe to call on every startup."""
+    """Create the tables if they don't exist, migrate the role column onto older
+    DBs, and (re)seed admin roles from ADMIN_USERNAMES. Safe on every startup."""
     with _connect() as conn:
         conn.execute(
             """
@@ -65,6 +82,7 @@ def init_db() -> None:
                 email         TEXT,
                 password_hash TEXT    NOT NULL,
                 password_salt TEXT    NOT NULL,
+                role          TEXT    NOT NULL DEFAULT 'student',
                 created_at    TEXT    NOT NULL
             )
             """
@@ -80,6 +98,20 @@ def init_db() -> None:
             )
             """
         )
+        # Migrate: older users.db predates the role column — add it in place.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "role" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'student'")
+        # Seed / refresh admin roles from .env every startup so the configured
+        # admins are always admins (and only they). Students are left untouched.
+        if config.ADMIN_USERNAMES:
+            placeholders = ",".join("?" for _ in config.ADMIN_USERNAMES)
+            conn.execute(
+                f"UPDATE users SET role = '{ROLE_ADMIN}' "
+                f"WHERE username IN ({placeholders})",
+                tuple(config.ADMIN_USERNAMES),
+            )
         conn.commit()
 
 
@@ -126,13 +158,21 @@ class AuthError(Exception):
 
 
 def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
-    """User fields safe to send to the client (never the hash/salt)."""
+    """User fields safe to send to the client (never the hash/salt). `role` lets
+    the frontend decide whether to show the admin-only model controls."""
+    keys = row.keys()
     return {
         "id": row["id"],
         "username": row["username"],
         "email": row["email"],
+        "role": (row["role"] if "role" in keys else ROLE_STUDENT) or ROLE_STUDENT,
         "created_at": row["created_at"],
     }
+
+
+def is_admin(user: Optional[Dict[str, Any]]) -> bool:
+    """True when `user` (a _public_user dict) carries the admin role."""
+    return bool(user and user.get("role") == ROLE_ADMIN)
 
 
 def sign_up(username: str, password: str, email: Optional[str] = None) -> Dict[str, Any]:
@@ -156,9 +196,9 @@ def sign_up(username: str, password: str, email: Optional[str] = None) -> Dict[s
     try:
         with _connect() as conn:
             cur = conn.execute(
-                "INSERT INTO users (username, email, password_hash, password_salt, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (username, email, pw_hash, salt.hex(), created),
+                "INSERT INTO users (username, email, password_hash, password_salt, role, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (username, email, pw_hash, salt.hex(), _role_for(username), created),
             )
             user_id = cur.lastrowid
             conn.commit()

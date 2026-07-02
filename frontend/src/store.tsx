@@ -1,11 +1,12 @@
 // App-wide store: the screen router (with back-stack), the persistent whiteboard
 // engine, and the current problem. Kept deliberately small — a React context over
 // useState/useRef rather than a heavyweight state library.
-import { createContext, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ExcalidrawBoard } from './board/ExcalidrawBoard';
 import { SCREEN_DEFS } from './config';
-import type { Problem, RenderMode, ScreenName, WorkFlow } from './types';
+import { fetchModels } from './api';
+import type { LLMModel, Problem, RenderMode, ScreenName, WorkFlow } from './types';
 
 interface StoreValue {
   // ── routing ──
@@ -35,6 +36,16 @@ interface StoreValue {
   renderMode: RenderMode;
   setRenderMode: (m: RenderMode) => void;
 
+  // ── AI model selection (student picks within the admin-controlled pool) ──
+  // `models` is the student-selectable pool from GET /models. `model` is the
+  // student's current choice. `forcedModel` is set when the admin forced a model
+  // (the picker is then locked to it — students can't override an admin's force).
+  models: LLMModel[];
+  model: string;
+  setModel: (id: string) => void;
+  forcedModel: string | null;
+  refreshModels: () => void;
+
   sessionId: string;
 }
 
@@ -56,6 +67,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [ocrText, setOcrText] = useState('');
   const [studentWork, setStudentWork] = useState('');
   const [renderMode, setRenderMode] = useState<RenderMode>('3');
+
+  // AI model pool + current choice. Loaded from GET /models; a forced model (set
+  // by an admin) overrides the choice and locks the picker.
+  const [models, setModels] = useState<LLMModel[]>([]);
+  const [model, setModelState] = useState<string>('');
+  const [forcedModel, setForcedModel] = useState<string | null>(null);
+
+  // Pull the student pool (usable ∧ admin-enabled) + default + any forced model.
+  // A forced model wins over the current choice; otherwise keep a valid choice,
+  // falling back to the backend default when the current one left the pool.
+  const refreshModels = () => {
+    fetchModels()
+      .then((res) => {
+        const pool = res.models || [];
+        setModels(pool);
+        setForcedModel(res.forced_model ?? null);
+        setModelState((cur) => {
+          if (res.forced_model) return res.forced_model;
+          if (cur && pool.some((m) => m.id === cur)) return cur;
+          return res.default_model || (pool[0]?.id ?? '');
+        });
+      })
+      .catch(() => {
+        /* leave defaults; AI calls still work with the backend's own default */
+      });
+  };
+  useEffect(() => {
+    refreshModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A forced model always wins; otherwise honour the student's own choice.
+  const setModel = (id: string) => {
+    if (forcedModel) return; // locked by admin
+    setModelState(id);
+  };
 
   const navStack = useRef<ScreenName[]>([]);
   const [board] = useState(() => new ExcalidrawBoard());
@@ -117,6 +164,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setStudentWork,
     renderMode,
     setRenderMode,
+    models,
+    model,
+    setModel,
+    forcedModel,
+    refreshModels,
     sessionId,
   };
 

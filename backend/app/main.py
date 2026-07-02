@@ -17,6 +17,23 @@ Key subsystems implemented:
   • ALMAS Pipeline  — Sprint → Control → Developer → Peer review stages
 """
 
+# ── Console encoding guard (Windows) ───────────────────────────────────────
+# The backend logs are full of Chinese ([startup] 题库就绪…) and emoji. On Windows
+# the console/stdout often defaults to GBK (cp936); writing this text then prints
+# 乱码 or raises UnicodeEncodeError. Force stdout/stderr to UTF-8 in-process so
+# logs stay readable however the server is launched (start.bat, `py -3.12 -m
+# uvicorn`, the VSCode terminal, …) — not just when the launcher happens to set
+# the code page. reconfigure() mutates the streams in place, so uvicorn's log
+# handlers (which reference these same objects) pick it up too. errors=
+# "backslashreplace" guarantees a stray glyph can never crash a log call. This is
+# a harmless no-op on POSIX, where UTF-8 is already the default.
+import sys as _sys
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass  # detached / non-reconfigurable stream (e.g. under some test runners)
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -53,18 +70,24 @@ from . import recognize  # nex-n2-pro vision handwriting recognition (recognize.
 # deterministic template SocraticEngine, so the demo always works.
 from . import config
 from . import prompts
+from . import sympy_compute  # SymPy as an on-demand calculator for the AI (NOT a judge)
 from .claude_service import claude_service, ClaudeError
 
-# Multi-path LLM consensus reasoner — the SOURCE OF TRUTH for correctness,
-# replacing SymPy. Several independent derivations must AGREE before a verdict is
-# trusted (see reasoner.py). SymPy is kept only as a non-authoritative cross-check
-# and an offline fallback, never as the sole arbiter.
-from .reasoner import reasoner_engine
+# Multi-provider LLM catalogue (Claude / DeepSeek / GPT) + the ADMIN-controlled
+# runtime model pool. providers.resolve_model() is the choke point that clamps
+# every AI call to the admin-enabled pool; model_policy is the SQLite overlay the
+# admin toggles. The enable/force controls are ADMIN-ONLY — see require_admin
+# below and docs/MODELS_AND_PROVIDERS.md.
+from . import providers
+from . import model_policy
 
-# RETIRED SymPy correctness judge — demoted to a non-authoritative OFFLINE FALLBACK
-# (de-symbolization step 3, 2026-06-27). It is invoked only when consensus is
-# unavailable; the rendering engine (NeuroSymbolicEngine) stays in this module.
-from .legacy import sympy_grader
+# Correctness engine — SymPy has FULLY RETIRED from judging (2026-07-02). A
+# student's answer is graded against a KNOWN-correct reference answer when the
+# question carries one (the bank's stored answer, incl. 学科网-fetched answers),
+# and otherwise by multi-path LLM consensus (the AI's own answer). No CAS is on
+# the grading path anymore (see reasoner.py). The SymPy-based NeuroSymbolicEngine
+# below is retained ONLY for step RENDERING in /analyze · /hint, never for judging.
+from .reasoner import reasoner_engine
 
 # User accounts & sessions, backed by SQLite (auth.py / users.db).
 from . import auth
@@ -145,6 +168,12 @@ def _warmup_ocr() -> None:
     # Make sure the user/session tables exist (SQLite, created on first run).
     auth.init_db()
     print(f"[startup] User DB ready ({auth.user_count()} accounts).")
+    # ADMIN-controlled model pool overlay (enable/disable + forced model).
+    model_policy.init_db()
+    pool = providers.enabled_pool()
+    forced = providers.public_pool().get("forced_model")
+    print(f"[startup] Model pool ready ({len(pool)} usable+enabled model(s)"
+          + (f", forced={forced}" if forced else "") + ").")
     # Exam question bank tables.
     exam.init_db()
     print(f"[startup] Exam bank ready ({exam.bank_size()} questions).")
@@ -194,6 +223,21 @@ def require_user(authorization: Optional[str] = Header(default=None)) -> Dict[st
 def optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[Dict[str, Any]]:
     """Like require_user but returns None instead of raising when not signed in."""
     return auth.get_user_by_token(_bearer_token(authorization))
+
+
+def require_admin(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """FastAPI dependency: reject the request unless it carries a valid session
+    token for an ADMIN account (401 if not signed in, 403 if not an admin).
+
+    This is the ONLY gate on the model availability / forced-assignment controls.
+    Students must never be able to reach these endpoints — see model_policy.py and
+    docs/MODELS_AND_PROVIDERS.md. Admins are seeded from ADMIN_USERNAMES (.env)."""
+    user = auth.get_user_by_token(_bearer_token(authorization))
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    if not auth.is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return user
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1487,7 +1531,8 @@ def _question_tag_row(name: str, primary: bool = False) -> Dict[str, Any]:
 
 def _ai_one_question(grade: Optional[int] = None,
                      focus_logic: Optional[str] = None,
-                     target_difficulty: Optional[int] = None) -> Optional[Dict[str, Any]]:
+                     target_difficulty: Optional[int] = None,
+                     model: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Generate ONE question AND tag it from the LIVE vocabulary (tags.db) via
     Claude. Existing tags are reused (usage bumped); any tag the model proposes
     when nothing fits is ADDED to the store (the self-evolving loop, source='ai').
@@ -1510,7 +1555,7 @@ def _ai_one_question(grade: Optional[int] = None,
             text = claude_service.complete(
                 system=system,
                 messages=[{"role": "user", "content": "请出 1 道题并按要求打标签，只输出 JSON 数组。"}],
-                session_id="practice-gen", max_tokens=2000,
+                model=model, session_id="practice-gen", max_tokens=2000,
                 temperature=0.7 + 0.1 * attempt,
             )
         except ClaudeError:
@@ -1683,7 +1728,7 @@ class XuekeProvider:
 def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
                   focus_logic: Optional[str] = None, difficulty: Optional[int] = None,
                   adaptive: Optional[str] = None, source: Optional[str] = None,
-                  tag: Optional[str] = None):
+                  tag: Optional[str] = None, model: Optional[str] = None):
     """One practice problem for the core tutoring UI — the 出题 pipeline.
 
     Source of truth is the project's OWN bank (exams.db) — NOT external OpenTDB.
@@ -1715,7 +1760,8 @@ def practice_next(exclude_id: Optional[str] = None, generate: bool = False,
         generate = True
 
     if generate:                       # opt-in AI generation, bank as fallback
-        q = _ai_one_question(focus_logic=focus_logic, target_difficulty=difficulty)
+        q = _ai_one_question(focus_logic=focus_logic, target_difficulty=difficulty,
+                             model=model)
         if q is not None:
             return {**_bank_to_card(q), "generated": True, "from_source": "ai",
                     "focus_logic": focus_logic, "target_difficulty": difficulty}
@@ -1764,13 +1810,14 @@ async def recognize_math(file: UploadFile = File(...), method: str = "nex"):
 
     The whiteboard PNG submitted by the student is turned into *text* (that
     string, not the picture, is what the frontend then feeds into /analyze).
-    `method` selects the design's two paths:
-      • "nex"    (default) — render → nex-n2-pro specialised OCR (path 1)
-      • "claude"           — hand the drawing to Claude vision (path 2)
-      • "auto"             — try nex first, fall back to Claude on miss/failure
+    `method` selects the OCR engine:
+      • "nex"      (default) — render → nex-n2-pro specialised OCR (path 1)
+      • "deepseek"           — DeepSeek (OpenAI-compatible) vision OCR (path 3)
+      • "claude"             — hand the drawing to Claude vision (path 2)
+      • "auto"               — try nex first, fall back to Claude on miss/failure
 
-    Falls back to a mock expression when neither gateway is configured so the
-    demo still works end-to-end before the .env is filled in.
+    Falls back to a mock expression when no gateway is configured so the demo
+    still works end-to-end before the .env is filled in.
     """
     image_bytes = await file.read()
     method = (method or "nex").strip().lower()
@@ -1781,6 +1828,9 @@ async def recognize_math(file: UploadFile = File(...), method: str = "nex"):
     if method == "claude":
         result = await run_in_threadpool(recognize.recognize_via_claude, image_bytes)
         engine = "claude-vision"
+    elif method == "deepseek":
+        result = await run_in_threadpool(recognize.recognize_via_deepseek, image_bytes)
+        engine = "deepseek-vision"
     else:
         result = await run_in_threadpool(recognize.recognize_detailed, image_bytes)
         engine = "nex-n2-pro"
@@ -1801,6 +1851,16 @@ async def recognize_math(file: UploadFile = File(...), method: str = "nex"):
 
     # empty / timeout / error — surface the reason so the UI shows a useful note.
     return {"text": "", "engine": engine, "status": status}
+
+
+def _provider_tag(requested_model: Optional[str]) -> str:
+    """A "provider:model" label for the model a request actually runs on (after
+    pool-clamp + forced override), so the UI can show who answered — e.g.
+    "claude:claude-opus-4-8", "deepseek:deepseek-chat", "openai:gpt-4o"."""
+    mid = providers.resolve_model(requested_model)
+    entry = providers.get_model(mid)
+    prov = entry["provider"] if entry else "claude"
+    return f"{prov}:{mid}"
 
 
 def generate_socratic(engine_result, hint_level, adaptive, model, session_id):
@@ -1834,9 +1894,7 @@ def generate_socratic(engine_result, hint_level, adaptive, model, session_id):
                 "content": text,
                 "hint_level": hint_level,
             }]
-            base["ai_provider"] = "claude:" + config.valid_model(
-                model or config.CLAUDE_DEFAULT_MODEL
-            )
+            base["ai_provider"] = _provider_tag(model)
         except ClaudeError as e:
             # Keep the template messages already in `base`; note why we fell back.
             base["ai_provider"] = "template"
@@ -2398,17 +2456,64 @@ def auth_me(authorization: Optional[str] = Header(default=None)):
     return {"user": user}
 
 
-@app.get("/claude/models")
-def claude_models():
-    """Models for the UI dropdown + whether the gateway is actually usable.
-    The frontend shows the list regardless; `available` tells it whether
-    answers will come from Claude or fall back to the template engine."""
+@app.get("/models")
+def list_models():
+    """The STUDENT-facing model pool for the AI-model picker.
+
+    Returns only the models a student may choose from — usable (provider
+    configured) AND admin-enabled — plus the default and, when the admin has
+    forced a model, `forced_model` (which the frontend uses to LOCK the picker).
+    The list of models here is entirely governed by the admin (see /admin/models);
+    a student can never widen it. `available` reflects whether any provider can
+    currently answer (else callers fall back to the template engine)."""
+    pool = providers.public_pool()
     return {
         "available": claude_service.available(),
-        "default_model": config.CLAUDE_DEFAULT_MODEL,
-        "models": config.CLAUDE_MODELS,
+        "default_model": pool["default"],
+        "forced_model": pool["forced_model"],
+        "models": pool["models"],
         "status": claude_service.status(),
     }
+
+
+@app.get("/claude/models")
+def claude_models():
+    """Backwards-compatible alias of GET /models (older frontends call this).
+    Also exposes `default_model` at the top level as the legacy shape did."""
+    return list_models()
+
+
+@app.get("/admin/models")
+def admin_list_models(admin: Dict[str, Any] = Depends(require_admin)):
+    """ADMIN-ONLY: the FULL model catalogue with per-model usable/enabled state
+    and the forced model, for the admin control panel. Guarded by require_admin —
+    students get 401/403 and must never see these controls."""
+    return providers.admin_catalogue()
+
+
+class AdminModelUpdate(BaseModel):
+    enable: Optional[Dict[str, bool]] = None   # {model_id: enabled} toggles
+    forced_model: Optional[str] = None         # set forced model; "" clears it
+    clear_forced: Optional[bool] = None        # explicit clear (alternative to "")
+
+
+@app.post("/admin/models")
+def admin_update_models(req: AdminModelUpdate,
+                        admin: Dict[str, Any] = Depends(require_admin)):
+    """ADMIN-ONLY: enable/disable models for students and/or set the forced model
+    ("强制分配"). Guarded by require_admin. Returns the refreshed admin catalogue.
+
+    ⚠️  This is a privileged control — the frontend must expose it to admins only.
+    Narrowing the enabled pool to a single model is exactly how an admin forces a
+    model on everyone; `forced_model` pins it even more explicitly."""
+    if req.enable:
+        for model_id, enabled in req.enable.items():
+            model_policy.set_enabled(model_id, bool(enabled))
+    if req.clear_forced:
+        model_policy.set_forced(None)
+    elif req.forced_model is not None:
+        model_policy.set_forced(req.forced_model or None)
+    return providers.admin_catalogue()
 
 
 @app.post("/claude/chat")
@@ -2438,26 +2543,28 @@ def claude_chat(request: ChatRequest):
             "reply": None,
             "provider": "unavailable",
             "available": False,
-            "reason": "Claude gateway not configured." if not config.is_configured()
-                      else "Claude temporarily unavailable (circuit breaker).",
+            "reason": "AI 网关未配置（无可用模型）。" if not providers.enabled_pool()
+                      else "AI 暂时不可用（熔断中）。",
         }
 
     try:
         system = prompts.build_chat_system(request.expression or "", engine_result,
                                            allow_special=request.allow_special)
         messages = prompts.to_messages(request.history or [], user_message)
-        reply = claude_service.complete(
+        # complete_with_compute services any <sympy>…</sympy> the model emits (exact
+        # calc it doesn't trust itself for) and lets it continue from the results —
+        # a compute tool, NOT grading. Same ClaudeError contract as complete().
+        reply = sympy_compute.complete_with_compute(
             system=system, messages=messages,
             model=request.model, session_id=session_id,
         )
-        model_id = config.valid_model(request.model or config.CLAUDE_DEFAULT_MODEL)
         # Persist the exchange in experience memory.
         memory.add_message(session_id, SocraticMessage(role="user", content=user_message))
         memory.add_message(session_id, SocraticMessage(role="tutor", content=reply))
         return {
             "session_id": session_id,
             "reply": reply,
-            "provider": "claude:" + model_id,
+            "provider": _provider_tag(request.model),
             "available": True,
         }
     except ClaudeError as e:
@@ -2497,47 +2604,67 @@ def get_policies():
     }
 
 
-def _check_student_answer(expression: str, answer: str, session_id: Optional[str] = None,
-                          model: Optional[str] = None) -> Dict[str, Any]:
-    """Grade a student's answer. Correctness now comes from CONSENSUS, not a CAS:
-    the LLM solves the problem several times independently and we keep the answer
-    the derivations AGREE on (see reasoner.py). This is the source of truth.
+def _reference_answer(question_id: Optional[str]) -> Optional[str]:
+    """The KNOWN-correct answer stored for a bank question, if any. This is the
+    answer written by AI generation OR fetched from the 学科网 API — it lives only
+    in the backend and is the authoritative reference for grading."""
+    if not question_id:
+        return None
+    q = exam.get_question(question_id)
+    ref = (q or {}).get("answer")
+    ref = (ref or "").strip()
+    return ref or None
 
-    SymPy is demoted to a fallback for when the gateway is down or the independent
-    paths disagree — never the sole arbiter — so word problems / geometry /
-    statistics (which SymPy silently declines) are now gradable, while simple
-    algebra is still gradable offline.
+
+def _check_student_answer(expression: str, answer: str, session_id: Optional[str] = None,
+                          model: Optional[str] = None,
+                          question_id: Optional[str] = None) -> Dict[str, Any]:
+    """Grade a student's answer. SymPy has FULLY RETIRED from judging (2026-07-02):
+    there is no CAS anywhere on this path. Correctness is decided against a
+    reference answer, in this order of authority:
+
+      1. The bank question's STORED answer (from AI generation or the 学科网 API),
+         looked up by `question_id` — the authoritative answer key. Compared with a
+         SymPy-free numeric normaliser first, then one LLM equivalence judge.
+      2. Otherwise, MULTI-PATH LLM CONSENSUS: the model solves the problem several
+         times independently and we keep the answer the derivations AGREE on — the
+         AI generates its own reference answer (see reasoner.py).
 
     Returns {"correct": Optional[bool], "judged_by": str|None, "reason": str|None}
-    plus optional "ground_truth"/"agreement"/"votes_label"; correct=None =
-    undetermined (caller should not guess).
+    plus optional "ground_truth"/"agreement"/"votes_label". `ground_truth` (the
+    answer) is present ONLY when correct — the answer is never revealed on a miss.
+    correct=None = undetermined (caller should not guess).
     """
     if not answer or not answer.strip():
         return {"correct": None, "judged_by": None, "reason": None}
 
-    # ── Primary judge: multi-path LLM consensus ──
+    # ── 1) Authoritative answer key (DB / 学科网), when the question carries one ──
+    reference = _reference_answer(question_id)
+    if reference:
+        rg = reasoner_engine.grade_with_reference(
+            expression, reference, answer, model=model, session_id=session_id)
+        if rg.get("correct") is not None:
+            out = {"correct": rg["correct"], "judged_by": rg["judged_by"],
+                   "reason": rg.get("reason")}
+            if rg.get("ground_truth") is not None:
+                out["ground_truth"] = rg["ground_truth"]
+            return out
+        # Answer key exists but the gateway was needed and down → don't fall back to
+        # re-solving (that could contradict the authoritative key); stay undetermined.
+        return {"correct": None, "judged_by": rg.get("judged_by"),
+                "reason": rg.get("reason")}
+
+    # ── 2) No stored answer: AI generates its own via multi-path consensus ──
     cg = reasoner_engine.grade(expression, answer, model=model, session_id=session_id)
-    if cg.get("correct") is not None:
-        out = {"correct": cg["correct"], "judged_by": cg["judged_by"],
-               "reason": cg.get("reason")}
-        for k in ("ground_truth", "agreement", "votes_label"):
-            if cg.get(k) is not None:
-                out[k] = cg[k]
-        return out
-
-    # ── Fallback: non-authoritative SymPy cross-check (offline / disagreement) ──
-    # Only trusted where SymPy is confident; used because consensus was unavailable
-    # (gateway down) or the independent paths failed to agree. The retired SymPy
-    # grader lives in app.legacy now; we inject the rendering engine's solver so the
-    # legacy module stays free of any import back into main.
-    sv = sympy_grader.sympy_grade(
-        expression, answer, NeuroSymbolicEngine.solve_with_steps
-    )
-    if sv is not None:
-        return {"correct": sv, "judged_by": "sympy-fallback", "reason": None}
-
-    return {"correct": None, "judged_by": cg.get("judged_by"),
-            "reason": cg.get("reason")}
+    out = {"correct": cg.get("correct"), "judged_by": cg.get("judged_by"),
+           "reason": cg.get("reason")}
+    # Expose the agreed answer only when the student is correct (never on a miss).
+    for k in ("agreement", "votes_label"):
+        if cg.get(k) is not None:
+            out[k] = cg[k]
+    if cg.get("correct") is True and cg.get("ground_truth") is not None:
+        out["ground_truth"] = cg["ground_truth"]
+    return out
 
 
 def _record_diagnosis(session_id: Optional[str], question_id: Optional[str],
@@ -2564,33 +2691,34 @@ def _record_diagnosis(session_id: Optional[str], question_id: Optional[str],
 @app.post("/verify")
 def verify_expression(request: MathRequest):
     """
-    Standalone verification endpoint — useful for checking student work.
+    Grade a student's submitted answer (校对屏 提交 → 判分).
 
-    If the student supplies their own `answer` (plus a `session_id`), the answer
-    is graded by MULTI-PATH LLM CONSENSUS — several independent derivations must
-    agree — with SymPy kept only as an offline fallback (see
-    `_check_student_answer`). The verdict is recorded in experience memory as a
-    genuine "solved / not solved" signal, which is what lets `success_rate` and
-    adaptive difficulty actually move over time. The response carries `judged_by`
-    (e.g. "consensus(3/3)") and `agreement` so the UI/caller knows how it graded.
+    SymPy has fully retired from judging: correctness is decided against a
+    KNOWN-correct reference answer when the question carries one — its stored
+    answer in exams.db, which also holds 学科网-fetched answers — and otherwise by
+    multi-path LLM consensus (the AI's own answer). See `_check_student_answer`.
+
+    The reference answer LIVES ONLY IN THE BACKEND: it is returned (as
+    `ground_truth`) ONLY when the student got it right, so the answer is revealed
+    only after a fully-correct submission — never while the answer is wrong. The
+    verdict is recorded in experience memory as a genuine "solved / not solved"
+    signal (drives `success_rate` and adaptive difficulty). The response carries
+    `judged_by` and, when available, `agreement`/`votes_label`.
+
+    We intentionally do NOT run the SymPy solver here anymore: it used to return
+    `verified_steps` that spelled out the solution, which would leak the answer.
     """
     policy_result = PolicyEngine.evaluate(request.expression)
     if not policy_result.allowed:
         raise HTTPException(status_code=400, detail="Policy violation")
 
-    result = NeuroSymbolicEngine.solve_with_steps(request.expression)
-    response: Dict[str, Any] = {
-        "original": request.expression,
-        "classification": result["classification"],
-        "verified_steps": result["verified_steps"],
-        "verification_status": result["verification_status"],
-        "latex": result["latex"],
-    }
+    response: Dict[str, Any] = {"original": request.expression}
 
     # ── Grade the student's own answer + emit the experience-memory signal ──
     if request.answer is not None and request.answer.strip():
         verdict = _check_student_answer(
-            request.expression, request.answer, request.session_id, request.model
+            request.expression, request.answer, request.session_id, request.model,
+            question_id=request.question_id,
         )
         is_correct = verdict["correct"]
         response["answer_checked"] = is_correct is not None
@@ -2598,8 +2726,9 @@ def verify_expression(request: MathRequest):
         response["judged_by"] = verdict["judged_by"]
         if verdict.get("reason"):
             response["judge_reason"] = verdict["reason"]
-        # Expose the consensus trace: the agreed answer + how many paths agreed.
-        if verdict.get("ground_truth") is not None:
+        # Reveal the reference answer ONLY on a correct submission (backend-only
+        # until then). `_check_student_answer` already withholds it on a miss.
+        if is_correct is True and verdict.get("ground_truth") is not None:
             response["ground_truth"] = verdict["ground_truth"]
         if verdict.get("agreement") is not None:
             response["agreement"] = verdict["agreement"]

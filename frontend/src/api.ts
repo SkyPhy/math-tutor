@@ -1,7 +1,10 @@
 // Typed FastAPI client. Endpoints + payloads mirror the legacy page so the backend
 // (the correctness core) needs no changes.
 import { API_BASE } from './config';
-import type { AssistAnalysis, ChatMsg, ManimRenderResp, Problem, RecognizeModel, WorkDraft } from './types';
+import type {
+  AdminModelsResp, AssistAnalysis, AuthUser, ChatMsg, LLMModel, ManimRenderResp,
+  ModelsResp, Problem, RecognizeModel, WorkDraft,
+} from './types';
 
 async function getJSON<T>(path: string): Promise<T> {
   const r = await fetch(API_BASE + path);
@@ -18,6 +21,57 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
+// ── AI models (student pool) + admin controls ─────────────────────────────────
+// GET /models — the student-selectable pool (usable ∧ admin-enabled) + default +
+// forced_model. Older backends only expose /claude/models; fall back to it.
+export async function fetchModels(): Promise<ModelsResp> {
+  try {
+    return await getJSON<ModelsResp>('/models');
+  } catch {
+    return await getJSON<ModelsResp>('/claude/models');
+  }
+}
+
+// Sign in (used ONLY by the admin panel to obtain a token; students stay anonymous).
+export async function signIn(username: string, password: string): Promise<{ user: AuthUser; token: string }> {
+  const r = await fetch(API_BASE + '/auth/signin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.detail || `signin → ${r.status}`);
+  return data as { user: AuthUser; token: string };
+}
+
+// ADMIN-ONLY (require an admin session token). 401/403 for non-admins.
+export async function adminGetModels(token: string): Promise<AdminModelsResp> {
+  const r = await fetch(API_BASE + '/admin/models', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.detail || `admin/models → ${r.status}`);
+  return data as AdminModelsResp;
+}
+
+export interface AdminModelUpdate {
+  enable?: Record<string, boolean>;   // {model_id: enabled}
+  forced_model?: string | null;       // set forced model id; '' or clear_forced clears
+  clear_forced?: boolean;
+}
+export async function adminSetModels(token: string, body: AdminModelUpdate): Promise<AdminModelsResp> {
+  const r = await fetch(API_BASE + '/admin/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.detail || `admin/models → ${r.status}`);
+  return data as AdminModelsResp;
+}
+
+export type { LLMModel };
+
 // ── /practice/next ───────────────────────────────────────────────────────────
 export interface PracticeParams {
   excludeId?: string | null;
@@ -27,6 +81,7 @@ export interface PracticeParams {
   difficulty?: number | null;
   adaptive?: string | null;
   tag?: string | null;
+  model?: string | null;    // AI model for generation (backend clamps to the pool)
 }
 
 export async function fetchProblem(p: PracticeParams = {}): Promise<Problem> {
@@ -37,6 +92,7 @@ export async function fetchProblem(p: PracticeParams = {}): Promise<Problem> {
   if (p.difficulty != null) url.searchParams.set('difficulty', String(p.difficulty));
   if (p.adaptive) url.searchParams.set('adaptive', p.adaptive);
   if (p.tag) url.searchParams.set('tag', p.tag);
+  if (p.model) url.searchParams.set('model', p.model);
   // 出题来源 picker: bank = default (no param); xueke routes to the 学科网 API.
   if (!p.generate && p.source && p.source !== 'bank') url.searchParams.set('source', p.source);
   const r = await fetch(url.toString());
