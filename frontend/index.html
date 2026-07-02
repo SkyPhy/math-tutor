@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Math Tutor</title>
+    <!-- Apply the saved theme (colour scheme + accent) before first paint so there is
+         no flash of the wrong theme. Mirrors localStorage keys used by src/lib/theme.ts. -->
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem('mt-theme-mode');
+          document.documentElement.setAttribute('data-theme', m === 'light' ? 'light' : 'dark');
+          var c1 = localStorage.getItem('mt-accent-c1');
+          var c2 = localStorage.getItem('mt-accent-c2');
+          if (c1) document.documentElement.style.setProperty('--accent-blue', c1);
+          if (c2) document.documentElement.style.setProperty('--accent-purple', c2);
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
