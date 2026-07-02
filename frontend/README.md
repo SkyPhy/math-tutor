@@ -8,6 +8,10 @@ FastAPI backend** over HTTP.
 > The Python backend (consensus grading `reasoner.py`, diagnosis, self-evolving tags, memory)
 > is the correctness core and is **not** part of this rewrite — React only calls it.
 
+> 📖 **Authoritative frontend reference: [`../docs/FRONTEND_GUIDE.md`](../docs/FRONTEND_GUIDE.md)** —
+> what every module does, the build standards, the theme/design-token system, and how-to recipes.
+> The `Layout` / `Status` sections below are historical and may lag; trust the guide.
+
 ## Run
 
 ```bash
