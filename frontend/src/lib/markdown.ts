@@ -1,11 +1,17 @@
-// Markdown + LaTeX rendering for the 校对屏 (③ check screen) preview.
+// Markdown + LaTeX rendering (shared by the 校对屏 preview, the chat log/preview, and
+// the assistant grid).
 //
 // marked handles the Markdown; MathJax (loaded from the CDN in index.html) does the
 // maths. The catch: marked treats a backslash before punctuation as an escape, so it
-// would silently eat the delimiters in `\( … \)` / `\[ … \]` before MathJax ever sees
-// them. We therefore PROTECT every maths span with a placeholder, run marked on the
-// prose, then restore the spans verbatim — so the LaTeX reaches MathJax intact.
+// would silently eat the delimiters in `\( … \)` before MathJax ever sees them. We
+// therefore PROTECT every maths span with a placeholder, run marked on the prose, then
+// restore the spans verbatim — so the LaTeX reaches MathJax intact.
+//
+// Maths is kept INLINE (never on its own line): `inlineMathDelimiters` first rewrites
+// every $$…$$ / \[…\] / $…$ to the inline \(…\) form (see lib/mathRender), so display
+// blocks fuse into the sentence.
 import { marked } from 'marked';
+import { asInlineMath, inlineMathDelimiters } from './mathRender';
 
 export function escapeHtml(s: string): string {
   return s
@@ -15,8 +21,8 @@ export function escapeHtml(s: string): string {
 }
 
 // Render Markdown with embedded LaTeX to typeset-ready HTML (used by render mode 1).
-// Recognises $$…$$, \[…\], \(…\) and single-$ inline maths; the single-$ form is
-// rewritten to \( … \) because that is the inline delimiter MathJax is configured for.
+// All maths ($$…$$, \[…\], \(…\), $…$) is normalised to the inline \(…\) form so it
+// fuses with the prose, then each span is protected from marked and restored verbatim.
 export function renderMarkdownMath(src: string): string {
   const spans: string[] = [];
   const stash = (raw: string): string => {
@@ -24,11 +30,10 @@ export function renderMarkdownMath(src: string): string {
     return `@@MATH${spans.length - 1}@@`;
   };
 
-  const protectedSrc = src
-    .replace(/\$\$[\s\S]+?\$\$/g, (m) => stash(m)) // $$ display $$
-    .replace(/\\\[[\s\S]+?\\\]/g, (m) => stash(m)) // \[ display \]
-    .replace(/\\\([\s\S]+?\\\)/g, (m) => stash(m)) // \( inline \)
-    .replace(/\$[^$\n]+?\$/g, (m) => stash('\\(' + m.slice(1, -1) + '\\)')); // $ inline $ → \( \)
+  // 1) every display/inline delimiter → inline \(…\); 2) protect the \(…\) spans and
+  //    any bare \(…\) already present from marked eating their backslashes.
+  const protectedSrc = inlineMathDelimiters(src)
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, x) => stash(asInlineMath(x)));
 
   let html = marked.parse(protectedSrc, { async: false, breaks: true, gfm: true }) as string;
   html = html.replace(/@@MATH(\d+)@@/g, (_, i) => spans[Number(i)] ?? '');

@@ -3,6 +3,7 @@ import { manimRender } from '../api';
 import type { ManimQuality } from '../api';
 import { API_BASE } from '../config';
 import { useMathJax } from '../hooks/useMathJax';
+import { asInlineMath } from '../lib/mathRender';
 import type { ManimFrame, ManimRenderResp } from '../types';
 
 // User-selectable render clarity. Higher = sharper but slower + larger file; keys must
@@ -150,7 +151,7 @@ function Storyboard({ frames }: { frames: ManimFrame[] }) {
       <div className="storyboard-stage">
         {frame?.title ? <div className="storyboard-title">{frame.title}</div> : null}
         <div className="storyboard-math" ref={ref}>
-          {frame?.latex ? `\\[ ${frame.latex} \\]` : ''}
+          {frame?.latex ? asInlineMath(frame.latex) : ''}
         </div>
         {frame?.caption ? <div className="storyboard-caption">{frame.caption}</div> : null}
       </div>

@@ -1,4 +1,5 @@
 import { useMathJax } from '../hooks/useMathJax';
+import { asInlineMath, inlineMathDelimiters } from '../lib/mathRender';
 
 // The backend writes a problem's maths straight into the Chinese `statement`
 // (e.g. "求 (a+\frac{1}{a})^2 的最小值") but WITHOUT math delimiters, so MathJax
@@ -47,11 +48,13 @@ function autoDelimit(src: string): string {
   return out;
 }
 
-// Render a statement to typeset-ready HTML. If the author already delimited the
-// maths ($…$ / \(…\) / \[…\]) we trust it as-is; otherwise we auto-delimit.
+// Render a statement to typeset-ready HTML. If the author already delimited the maths
+// ($…$ / \(…\) / \[…\] / $$…$$) we trust it — but normalise every delimiter to the
+// inline \(…\) form so display blocks fuse into the sentence (see lib/mathRender);
+// otherwise we auto-delimit (which already emits inline \(…\)).
 function renderStatement(src: string): string {
   const delimited = /\$|\\\(|\\\[/.test(src);
-  const html = delimited ? escapeHtml(src) : autoDelimit(src);
+  const html = delimited ? escapeHtml(inlineMathDelimiters(src)) : autoDelimit(src);
   return html.replace(/\r?\n/g, '<br/>');
 }
 
@@ -72,8 +75,9 @@ export function ProblemBody({
   // doesn't want). Only fall back to it when the statement has no maths of its own.
   const statementHasMath = /\\\(|\\\[|\$/.test(body);
   const showTex = tex && !statementHasMath && !text.includes(tex);
-  const html =
-    body + (showTex ? `<span class="problem-latex-inline">\\[ ${escapeHtml(tex)} \\]</span>` : '');
+  // Fuse the core LaTeX inline (with a leading space) instead of a pulled-out display
+  // block on its own line.
+  const html = body + (showTex ? ` ${asInlineMath(escapeHtml(tex))}` : '');
   const ref = useMathJax<HTMLDivElement>(html);
   return <div ref={ref} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }

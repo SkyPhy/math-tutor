@@ -24,13 +24,15 @@
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <!-- MathJax 3 — same renderer the legacy page used. Display math is \[ ... \],
-         inline is \( ... \); loadProblem wraps LaTeX in \[ ... \]. -->
+    <!-- MathJax 3. PROJECT RULE: maths always renders INLINE / fused, never on its own
+         line (see src/lib/mathRender.ts). So there are NO display delimiters — $$…$$ and
+         \[…\] are registered as *inline* too, a safety net for any content that reaches
+         MathJax without first passing through the render modules. -->
     <script>
       window.MathJax = {
         tex: {
-          inlineMath: [['\\(', '\\)']],
-          displayMath: [['$$', '$$'], ['\\[', '\\]']],
+          inlineMath: [['\\(', '\\)'], ['$$', '$$'], ['\\[', '\\]']],
+          displayMath: [],
         },
         options: {
           skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
