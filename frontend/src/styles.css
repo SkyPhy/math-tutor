@@ -29,7 +29,12 @@
             --surface: #1e293b;
             --surface-rgb: 255, 255, 255;
             --glass-bg: rgba(var(--surface-rgb), 0.04);
-            --glass-border: rgba(var(--surface-rgb), 0.06);
+            /* Borderless by request: edges are invisible (was a faint hairline). Panels
+               are separated by their translucent fill + spacing, not lines. */
+            --glass-border: transparent;
+            /* Inputs / inset fields: a light-tint raised surface (was a hard dark
+               rgba(0,0,0,.25) box that stayed dark in light mode → unreadable). */
+            --field-bg: rgba(var(--surface-rgb), 0.06);
             --text-main: #f1f5f9;
             --text-dim: #94a3b8;
         }
@@ -41,7 +46,8 @@
             --surface: #ffffff;
             --surface-rgb: 15, 23, 42;
             --glass-bg: rgba(var(--surface-rgb), 0.035);
-            --glass-border: rgba(var(--surface-rgb), 0.08);
+            --glass-border: transparent;
+            --field-bg: rgba(var(--surface-rgb), 0.05);
             --text-main: #1e293b;
             --text-dim: #566172;
         }
@@ -54,7 +60,6 @@
         [data-theme="light"] .problem-tag,
         [data-theme="light"] .exam-chip { color: #0369a1; }
         [data-theme="light"] .problem-tag.logic { color: #6d28d9; }
-        [data-theme="light"] .pc-select { color: var(--text-main); }
 
         /* ── Global theme picker (fixed top-right, on every screen) ── */
         .theme-controls {
@@ -224,7 +229,7 @@
         .pc-label { font-size: 0.82rem; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
         .pc-select {
             background: rgba(var(--surface-rgb), 0.06); border: 1px solid var(--glass-border);
-            color: #e5e7eb; border-radius: var(--radius-sm); padding: 5px 9px; font-size: 0.85rem;
+            color: var(--text-main); border-radius: var(--radius-sm); padding: 5px 9px; font-size: 0.85rem;
         }
 
         .difficulty-easy {
@@ -261,7 +266,7 @@
 
         .problem-latex {
             padding: 20px;
-            background: rgba(0, 0, 0, 0.25);
+            background: var(--field-bg);
             border: 1px solid var(--glass-border);
             border-radius: var(--radius-md);
             text-align: center;
@@ -847,7 +852,7 @@
         }
 
         input[type="text"] {
-            background: rgba(0, 0, 0, 0.2);
+            background: var(--field-bg);
             border: 1px solid var(--glass-border);
             color: white;
             padding: 15px;
@@ -865,7 +870,7 @@
         }
 
         .method-select {
-            background: rgba(0, 0, 0, 0.2);
+            background: var(--field-bg);
             border: 1px solid var(--glass-border);
             color: white;
             padding: 15px;
@@ -907,7 +912,7 @@
         }
 
         .btn-secondary {
-            background: transparent;
+            background: var(--field-bg);
             border: 1px solid var(--glass-border);
             color: var(--text-dim);
             padding: 10px;
@@ -917,8 +922,8 @@
         }
 
         .btn-secondary:hover {
-            background: var(--glass-border);
-            color: white;
+            background: rgba(var(--surface-rgb), 0.12);
+            color: var(--text-main);
         }
 
         /* "Hints & Progress" return button — tinted to stand out from Clear Board. */
@@ -986,7 +991,7 @@
         }
 
         .result-box {
-            background: rgba(0, 0, 0, 0.2);
+            background: var(--field-bg);
             border-radius: var(--radius-lg);
             padding: 20px;
             border-left: 4px solid var(--accent-blue);
@@ -1034,7 +1039,7 @@
         .exam-tags-wrap { margin-top: 14px; }
         .exam-tags-panel {
             margin-top: 12px; padding: 14px 16px; border-radius: var(--radius-md);
-            background: rgba(0, 0, 0, 0.2); border-left: 3px solid var(--accent-blue);
+            background: var(--field-bg); border-left: 3px solid var(--accent-blue);
         }
         .exam-dim { margin: 6px 0; }
         .exam-dim-name { font-size: 0.78rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1168,12 +1173,12 @@
 .check-tool-scroll > .check-tool { flex: 0 0 auto; }
 .check-tool-select {
     flex: 0 0 auto; padding: 6px 8px; font-size: 0.85rem; white-space: nowrap;
-    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-border);
+    background: var(--field-bg); border: 1px solid var(--glass-border);
     color: var(--text-main); border-radius: var(--radius-sm); cursor: pointer;
 }
 .check-editor {
     width: 100%; box-sizing: border-box; min-height: 150px; resize: vertical;
-    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-border); border-radius: var(--radius-md);
+    background: var(--field-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-md);
     color: var(--text-main); padding: 14px 16px; line-height: 1.6;
     font-family: 'Consolas', 'Courier New', monospace; font-size: 0.98rem;
 }
@@ -1199,7 +1204,7 @@
 }
 .check-filename { flex: 1 1 auto; }
 .check-filename-input {
-    flex: 1; min-width: 160px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--glass-border);
+    flex: 1; min-width: 160px; background: var(--field-bg); border: 1px solid var(--glass-border);
     color: var(--text-main); padding: 9px 12px; border-radius: var(--radius-md); font-family: 'Outfit', sans-serif;
     font-size: 0.9rem;
 }
@@ -1305,7 +1310,7 @@
 .chat-bubble { padding: 9px 13px; border-radius: var(--radius-md); line-height: 1.55; font-size: 0.94rem;
     color: var(--text-main); max-width: 80%; overflow-x: auto; }
 .chat-user .chat-bubble { background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.25); }
-.chat-assistant .chat-bubble { background: rgba(var(--surface-rgb), 0.04); border: 1px solid var(--glass-border); }
+.chat-assistant .chat-bubble { background: rgba(var(--surface-rgb), 0.07); }
 .chat-bubble p { margin: 0.25em 0; }
 .chat-typing { color: var(--text-dim); font-style: italic; }
 .chatbox-note { margin: 0; color: #fbbf24; font-size: 0.8rem; }
@@ -1314,10 +1319,22 @@
 .chatbox-input { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
 .chatbox-textarea {
     width: 100%; flex: 1; box-sizing: border-box; resize: vertical; min-height: 46px;
-    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-border); border-radius: var(--radius-md);
+    background: var(--field-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-md);
     color: var(--text-main); padding: 11px 14px; line-height: 1.5; font-family: 'Outfit', sans-serif; font-size: 0.95rem;
 }
 .chatbox-textarea:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+
+/* Live md+latex preview of what's being typed (same renderer as the 校对屏 preview),
+   so the student sees the rendered formula before sending. Hidden when empty / 纯文本. */
+.chatbox-preview { display: flex; flex-direction: column; gap: 6px; }
+.chatbox-preview-label {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+}
+.chatbox-preview-body {
+    background: var(--field-bg); border-radius: var(--radius-md); padding: 10px 14px;
+    color: var(--text-main); line-height: 1.6; font-size: 0.92rem; overflow-x: auto;
+}
+.chatbox-preview-body p { margin: 0.3em 0; }
 
 /* Bottom control row (§C-公共): 渲染方式 · 换行键 · 允许识别 · 发送. */
 .chatbox-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -1388,7 +1405,7 @@
 }
 
 .storyboard {
-    border: 1px solid var(--glass-border); border-radius: var(--radius-md); background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--glass-border); border-radius: var(--radius-md); background: var(--field-bg);
     display: flex; flex-direction: column; gap: 12px; padding: 16px;
 }
 .storyboard-stage {

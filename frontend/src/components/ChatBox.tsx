@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { renderMarkdownMath, renderSource, escapeHtml } from '../lib/markdown';
 import { useMathJax } from '../hooks/useMathJax';
@@ -169,6 +169,17 @@ export function ChatBox({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useMathJax<HTMLDivElement>(`${renderMode}:${messages.length}`); // re-typeset on change
 
+  // Live preview of the draft message, rendered the same way it will send (md+latex /
+  // source), so the student sees the LaTeX typeset before hitting 发送. 纯文本 (mode 3)
+  // needs no preview. MathJax re-typesets whenever the html changes.
+  const previewHtml = useMemo(() => {
+    if (!text.trim()) return '';
+    if (renderMode === '1') return renderMarkdownMath(text);
+    if (renderMode === '2') return renderSource(text);
+    return '';
+  }, [text, renderMode]);
+  const previewRef = useMathJax<HTMLDivElement>(previewHtml);
+
   const send = () => {
     const t = applySpecial(text, special).trim();
     if (!t || busy || disabled) return;
@@ -259,6 +270,16 @@ export function ChatBox({
           disabled={disabled}
           spellCheck={false}
         />
+        {previewHtml ? (
+          <div className="chatbox-preview">
+            <span className="chatbox-preview-label">预览</span>
+            <div
+              className="chatbox-preview-body"
+              ref={previewRef}
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </div>
+        ) : null}
         <div className="chatbox-actions">
           {/* ① 渲染方式：md+latex 渲染 还是 仅文本（修复消失的下拉菜单） */}
           <select
